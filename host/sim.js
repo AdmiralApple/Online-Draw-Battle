@@ -1,6 +1,11 @@
 // Authoritative battle simulation. Runs in the host player's browser at TICK_RATE.
 // Units are plain objects; a uniform spatial hash answers neighbour queries and
 // a per-side Dijkstra flow field steers units around walls and slow terrain.
+// Supports any number of sides (1v1 and free-for-all). Every other side is an enemy.
+//
+// Walls: the flow field may route *through* wall tiles at a high cost, so units use
+// real gaps when they exist but break through when an army is fully walled in.
+// Wall tiles have hit points; broken tiles become open ground for everyone.
 
 import {
   WORLD, COLS, ROWS, DT, UNITS, TERRAIN, T, BATTLE_TIME_LIMIT,
@@ -13,6 +18,10 @@ const HC = Math.ceil(WORLD.width / HASH_CELL);
 const HR = Math.ceil(WORLD.height / HASH_CELL);
 const MAX_RADIUS = Math.max(...UNITS.map((u) => u.radius)) * 1.1;
 const FLOW_INTERVAL = 0.5;
+// Pathing cost of one wall tile, in tiles of open ground. High enough that units walk a
+// long way round to a real gap, low enough that an enclosed army still finds a way out.
+const WALL_PASS_COST = 60;
+export const WALL_HP = 160;
 const MAX_EVENTS = 250;
 
 export const PROJ = { ARROW: 0, BOMB: 1 };
@@ -78,41 +87,48 @@ export class Battle {
     this.tick = 0;
     this.time = 0;
     this.over = false;
-    this.winner = null; // 0, 1, or -1 for draw
+    this.winner = null; // winning side, or -1 for a draw
+    this.sides = drafts.length;
     this.reason = '';
     this.events = [];
     this.projectiles = [];
     this.units = [];
     this.nextId = 1;
 
-    // Merge both players' terrain into one grid.
+    // Merge every player's terrain into one grid.
     this.grid = new Uint8Array(COLS * ROWS);
     for (const d of drafts) {
       for (let i = 0; i < this.grid.length; i++) if (d.grid[i]) this.grid[i] = d.grid[i];
     }
     this.speed = new Float32Array(COLS * ROWS);
     this.solid = new Uint8Array(COLS * ROWS);
+    this.wallHp = new Float32Array(COLS * ROWS);
+    this.broken = []; // wall tiles destroyed so far (sent to late joiners)
     for (let i = 0; i < this.grid.length; i++) {
       const t = TERRAIN[this.grid[i]];
       this.solid[i] = t && t.solid ? 1 : 0;
       this.speed[i] = t ? (t.solid ? 0 : t.speed) : 1;
+      if (this.solid[i]) this.wallHp[i] = WALL_HP;
     }
 
     drafts.forEach((d, side) => {
       for (const [type, x, y] of d.units) this.spawn(type, side, x, y);
     });
 
-    this.flow = [new Float32Array(COLS * ROWS), new Float32Array(COLS * ROWS)];
+    const perSide = (make) => Array.from({ length: this.sides }, make);
+    this.flow = perSide(() => new Float32Array(COLS * ROWS));
+    // through[side][i] = 1 when the cheapest route from tile i to an enemy crosses a wall.
+    this.through = perSide(() => new Uint8Array(COLS * ROWS));
     this.flowTimer = 0;
     this.heap = new Heap(COLS * ROWS);
     this.hash = Array.from({ length: HC * HR }, () => []);
 
     this.stats = {
-      start: [this.countSide(0), this.countSide(1)],
-      startValue: [this.valueOf(0), this.valueOf(1)],
-      kills: [0, 0],
-      healed: [0, 0],
-      shots: [0, 0],
+      start: perSide((_, i) => this.countSide(i)),
+      startValue: perSide((_, i) => this.valueOf(i)),
+      kills: perSide(() => 0),
+      healed: perSide(() => 0),
+      shots: perSide(() => 0),
     };
   }
 
@@ -120,16 +136,20 @@ export class Battle {
   spawn(type, side, x, y) {
     const d = UNITS[type];
     const r = d.radius * (1 + (this.rng() - 0.5) * 0.1);
+    const toCentre = Math.atan2(WORLD.height / 2 - y, WORLD.width / 2 - x);
     const u = {
       id: this.nextId, type, side, def: d,
       x, y, vx: 0, vy: 0, kx: 0, ky: 0,
       hp: d.hp, maxHp: d.hp, r, mass: d.mass,
-      heading: side === 0 ? 0 : Math.PI,
+      heading: toCentre,
       cd: this.rng() * 0.8, healCd: 0,
       target: null, los: false, retarget: this.rng() * 0.4,
-      fdx: side === 0 ? 1 : -1, fdy: 0,
-      attackAnim: 0, stun: 0, hurt: 0, inWater: false, alive: true,
+      fdx: Math.cos(toCentre), fdy: Math.sin(toCentre),
+      attackAnim: 0, stun: 0, hurt: 0, inWater: false, alive: true, siege: false, flowing: false, stuck: 0, chasing: false, chaseBlock: 0,
     };
+    // Units drawn right next to a wall can overlap it. Pop them out to open ground,
+    // otherwise every move they try is blocked and they never budge.
+    this.unstick(u);
     this.nextId = (this.nextId % 65535) + 1;
     this.units.push(u);
     return u;
@@ -150,7 +170,7 @@ export class Battle {
   }
 
   emit(ev) {
-    if (this.events.length < MAX_EVENTS) this.events.push(ev);
+    if (this.events.length < MAX_EVENTS || ev.k === 'wall') this.events.push(ev);
   }
 
   takeEvents() {
@@ -233,6 +253,62 @@ export class Battle {
     return false;
   }
 
+  /** Index of a wall tile overlapping the circle (-2 for the world edge, -1 for none). */
+  blockingTile(x, y, r) {
+    if (x - r < 0 || y - r < 0 || x + r > WORLD.width || y + r > WORLD.height) return -2;
+    const c0 = Math.floor((x - r) / TILE);
+    const c1 = Math.floor((x + r) / TILE);
+    const r0 = Math.floor((y - r) / TILE);
+    const r1 = Math.floor((y + r) / TILE);
+    let best = -1;
+    let bestD = r * r;
+    for (let row = r0; row <= r1; row++) {
+      for (let col = c0; col <= c1; col++) {
+        const i = row * COLS + col;
+        if (this.solid[i] !== 1) continue;
+        const nx = Math.max(col * TILE, Math.min(x, (col + 1) * TILE));
+        const ny = Math.max(row * TILE, Math.min(y, (row + 1) * TILE));
+        const d2 = (x - nx) ** 2 + (y - ny) ** 2;
+        if (d2 < bestD) { bestD = d2; best = i; }
+      }
+    }
+    return best;
+  }
+
+  /** Move a unit that overlaps a wall or the map edge to the nearest open spot. */
+  unstick(u) {
+    if (!this.circleBlocked(u.x, u.y, u.r)) return;
+    for (let dist = 1; dist <= 60; dist += 1) {
+      const steps = Math.max(8, Math.ceil(dist * 1.5));
+      for (let k = 0; k < steps; k++) {
+        const a = (k / steps) * Math.PI * 2;
+        const x = u.x + Math.cos(a) * dist;
+        const y = u.y + Math.sin(a) * dist;
+        if (!this.circleBlocked(x, y, u.r)) { u.x = x; u.y = y; return; }
+      }
+    }
+  }
+
+  damageWall(i, amount) {
+    if (i < 0 || this.solid[i] !== 1) return;
+    const before = this.wallHp[i];
+    this.wallHp[i] -= amount;
+    const x = ((i % COLS) + 0.5) * TILE;
+    const y = (((i / COLS) | 0) + 0.5) * TILE;
+    if (this.wallHp[i] > 0) {
+      // Chips fly off as the wall weakens.
+      if (Math.floor(before / 40) !== Math.floor(this.wallHp[i] / 40)) this.emit({ k: 'chip', x, y });
+      return;
+    }
+    this.wallHp[i] = 0;
+    this.solid[i] = 0;
+    this.grid[i] = 0;
+    this.speed[i] = 1;
+    this.broken.push(i);
+    this.emit({ k: 'wall', i, x, y });
+    this.flowTimer = Math.min(this.flowTimer, 0.1); // re-plan routes soon
+  }
+
   lineOfSight(x0, y0, x1, y1) {
     const dx = x1 - x0;
     const dy = y1 - y0;
@@ -245,10 +321,15 @@ export class Battle {
   }
 
   // --- Flow fields ---------------------------------------------------------------
-  /** flow[side] = travel cost from each tile to the nearest enemy of `side`. */
+  /**
+   * flow[side] = travel cost from each tile to the nearest enemy of `side`.
+   * Wall tiles cost WALL_PASS_COST each, so walled-in armies still get a route.
+   */
   computeFlow(side) {
     const dist = this.flow[side];
+    const through = this.through[side];
     dist.fill(Infinity);
+    through.fill(0);
     const heap = this.heap;
     heap.clear();
     for (const u of this.units) {
@@ -269,11 +350,13 @@ export class Battle {
         const nr = r + oy;
         if (nc < 0 || nr < 0 || nc >= COLS || nr >= ROWS) continue;
         const ni = nr * COLS + nc;
-        if (this.solid[ni]) continue;
-        if (ox !== 0 && oy !== 0 && (this.solid[r * COLS + nc] || this.solid[nr * COLS + c])) continue;
-        const nd = d + w / Math.max(0.2, this.speed[ni]);
+        const wall = this.solid[ni] === 1;
+        // No diagonal steps into walls or squeezing between two wall corners.
+        if (ox !== 0 && oy !== 0 && (wall || this.solid[i] || this.solid[r * COLS + nc] || this.solid[nr * COLS + c])) continue;
+        const nd = d + (wall ? w * WALL_PASS_COST : w / Math.max(0.2, this.speed[ni]));
         if (nd < dist[ni]) {
           dist[ni] = nd;
+          through[ni] = wall ? 1 : through[i];
           heap.push(ni, nd);
         }
       }
@@ -295,10 +378,13 @@ export class Battle {
       const nr = r + oy;
       if (nc < 0 || nr < 0 || nc >= COLS || nr >= ROWS) continue;
       const ni = nr * COLS + nc;
-      if (ox !== 0 && oy !== 0 && (this.solid[r * COLS + nc] || this.solid[nr * COLS + c])) continue;
+      if (ox !== 0 && oy !== 0 && (this.solid[ni] || this.solid[r * COLS + nc] || this.solid[nr * COLS + c])) continue;
       if (dist[ni] < best) { best = dist[ni]; bx = ox; by = oy; }
     }
     if (!Number.isFinite(best) || (bx === 0 && by === 0)) return false;
+    // Following a route that breaks through a wall: bump into it and attack it.
+    u.siege = this.through[u.side][i] === 1;
+    u.flowing = true;
     const len = Math.hypot(bx, by);
     u.fdx += (bx / len - u.fdx) * 0.35;
     u.fdy += (by / len - u.fdy) * 0.35;
@@ -437,6 +523,19 @@ export class Battle {
 
   explode(p) {
     this.emit({ k: 'boom', x: Math.round(p.x), y: Math.round(p.y), r: p.aoe });
+    // Bombs also crack nearby wall tiles.
+    const c0 = Math.max(0, Math.floor((p.x - p.aoe) / TILE));
+    const c1 = Math.min(COLS - 1, Math.floor((p.x + p.aoe) / TILE));
+    const r0 = Math.max(0, Math.floor((p.y - p.aoe) / TILE));
+    const r1 = Math.min(ROWS - 1, Math.floor((p.y + p.aoe) / TILE));
+    for (let row = r0; row <= r1; row++) {
+      for (let col = c0; col <= c1; col++) {
+        const i = row * COLS + col;
+        if (this.solid[i] !== 1) continue;
+        const d = Math.hypot((col + 0.5) * TILE - p.x, (row + 0.5) * TILE - p.y);
+        if (d <= p.aoe) this.damageWall(i, p.damage * 0.6 * (1 - 0.6 * Math.min(1, d / p.aoe)));
+      }
+    }
     this.forNear(p.x, p.y, p.aoe + MAX_RADIUS, (o) => {
       if (!o.alive || o.side === p.side) return;
       const dx = o.x - p.x;
@@ -467,7 +566,10 @@ export class Battle {
 
   advance(u, speed) {
     const t = u.target;
-    if (t && u.los) {
+    // Charge straight at a visible target, unless that just ran us into a wall
+    // (e.g. seeing through a gap too small to fit through): then follow the route.
+    if (t && u.los && u.chaseBlock <= 0) {
+      u.chasing = true;
       const dx = t.x - u.x;
       const dy = t.y - u.y;
       const dl = Math.hypot(dx, dy) || 1;
@@ -487,7 +589,7 @@ export class Battle {
     if (!t) return this.advance(u, d.speed);
     const dist = Math.hypot(t.x - u.x, t.y - u.y);
     const contact = u.r + t.r + d.melee.reach;
-    if (dist <= contact) {
+    if (dist <= contact && u.los) {
       this.face(u, t.x, t.y);
       if (u.cd <= 0) {
         this.meleeHit(u, t, dist);
@@ -606,8 +708,7 @@ export class Battle {
     this.flowTimer -= DT;
     if (this.flowTimer <= 0) {
       this.flowTimer = FLOW_INTERVAL;
-      this.computeFlow(0);
-      this.computeFlow(1);
+      for (let side = 0; side < this.sides; side++) this.computeFlow(side);
     }
 
     for (const u of this.units) {
@@ -628,6 +729,9 @@ export class Battle {
 
       let dvx = 0;
       let dvy = 0;
+      u.siege = false;
+      u.flowing = false;
+      u.chasing = false;
       if (u.stun > 0) {
         u.stun -= DT;
       } else {
@@ -652,10 +756,23 @@ export class Battle {
       // Integrate (walk velocity + knockback), sliding along walls.
       const mx = (u.vx + u.kx) * DT;
       const my = (u.vy + u.ky) * DT;
+      const x0 = u.x;
+      const y0 = u.y;
+      let blocked = -1;
       if (!this.circleBlocked(u.x + mx, u.y, u.r)) u.x += mx;
-      else { u.vx = 0; u.kx *= -0.3; }
+      else { blocked = this.blockingTile(u.x + mx, u.y, u.r); u.vx = 0; u.kx *= -0.3; }
       if (!this.circleBlocked(u.x, u.y + my, u.r)) u.y += my;
-      else { u.vy = 0; u.ky *= -0.3; }
+      else { if (blocked === -1) blocked = this.blockingTile(u.x, u.y + my, u.r); u.vy = 0; u.ky *= -0.3; }
+      if (blocked !== -1 && this.circleBlocked(u.x, u.y, u.r)) this.unstick(u);
+      // Pinned against a wall (e.g. by a gap too narrow for this unit)? Keep count.
+      const wanted = Math.hypot(mx, my);
+      const pinned = blocked >= 0 && wanted > 0 && Math.hypot(u.x - x0, u.y - y0) < wanted * 0.3;
+      if (pinned) u.stuck += DT;
+      else u.stuck = Math.max(0, u.stuck - DT * 2);
+      if (blocked >= 0 && u.chasing) u.chaseBlock = 0.6;
+      else if (u.chaseBlock > 0) u.chaseBlock -= DT;
+      // Breaking through: a unit routed through a wall, or stuck against one, attacks the tile in its way.
+      if ((u.siege || u.stuck > 0.8) && blocked >= 0 && u.cd <= 0 && u.def.role !== 'healer') this.siegeHit(u, blocked);
       const kd = Math.max(0, 1 - 7 * DT);
       u.kx *= kd;
       u.ky *= kd;
@@ -674,6 +791,18 @@ export class Battle {
     this.stepProjectiles();
     this.units = this.units.filter((u) => u.alive);
     this.checkEnd();
+  }
+
+  siegeHit(u, i) {
+    const d = u.def;
+    const dmg = d.melee ? d.melee.damage : d.ranged.damage * 0.5;
+    const cd = d.melee ? d.melee.cooldown : d.ranged.cooldown * 0.6;
+    this.damageWall(i, dmg * (0.85 + this.rng() * 0.3));
+    u.cd = cd * (0.9 + this.rng() * 0.2);
+    u.attackAnim = 1;
+    const tx = ((i % COLS) + 0.5) * TILE;
+    const ty = (((i / COLS) | 0) + 0.5) * TILE;
+    u.heading = Math.atan2(ty - u.y, tx - u.x);
   }
 
   /** Push overlapping units apart, heavier units push lighter ones more. */
@@ -712,20 +841,21 @@ export class Battle {
   }
 
   checkEnd() {
-    const a = this.countSide(0);
-    const b = this.countSide(1);
-    if (a === 0 || b === 0) {
+    const alive = [];
+    for (let side = 0; side < this.sides; side++) if (this.countSide(side) > 0) alive.push(side);
+    if (alive.length <= 1) {
       this.over = true;
-      this.winner = a === 0 && b === 0 ? -1 : a === 0 ? 1 : 0;
-      this.reason = this.winner === -1 ? 'Mutual destruction' : 'Army destroyed';
+      this.winner = alive.length ? alive[0] : -1;
+      this.reason = this.winner === -1 ? 'Mutual destruction' : this.sides > 2 ? 'Last army standing' : 'Army destroyed';
       return;
     }
     if (this.time >= BATTLE_TIME_LIMIT) {
-      const va = this.valueOf(0) / Math.max(1, this.stats.startValue[0]);
-      const vb = this.valueOf(1) / Math.max(1, this.stats.startValue[1]);
+      // Decide on the share of starting strength each surviving army kept.
+      const frac = alive.map((side) => [side, this.valueOf(side) / Math.max(1, this.stats.startValue[side])]);
+      frac.sort((p, q) => q[1] - p[1]);
       this.over = true;
-      if (Math.abs(va - vb) < 0.02) { this.winner = -1; this.reason = 'Time up, too close to call'; }
-      else { this.winner = va > vb ? 0 : 1; this.reason = 'Time up, decided on surviving strength'; }
+      if (frac[0][1] - frac[1][1] < 0.02) { this.winner = -1; this.reason = 'Time up, too close to call'; }
+      else { this.winner = frac[0][0]; this.reason = 'Time up, decided on surviving strength'; }
     }
   }
 
@@ -734,7 +864,8 @@ export class Battle {
       winner: this.winner,
       reason: this.reason,
       time: Math.round(this.time),
-      survivors: [this.countSide(0), this.countSide(1)],
+      sides: this.sides,
+      survivors: Array.from({ length: this.sides }, (_, i) => this.countSide(i)),
       start: this.stats.start,
       kills: this.stats.kills,
       healed: this.stats.healed.map(Math.round),

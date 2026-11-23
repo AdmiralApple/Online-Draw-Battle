@@ -1,11 +1,13 @@
 // A game room, run inside the host player's browser (in a Web Worker).
-// Two player slots, lobby settings, and the phase state machine
+// Up to three player seats, lobby settings, and the phase state machine
 //   lobby -> draw -> battle -> results -> (draw | lobby)
 
 import {
-  defaultSettings, sanitizeSettings, VISIBILITY, TICK_RATE, SNAPSHOT_EVERY,
+  defaultSettings, sanitizeSettings, VISIBILITY, TICK_RATE, SNAPSHOT_EVERY, MAX_PLAYERS, layoutFor,
 } from '../shared/config.js';
-import { validateDraft, trimToBudget, encodeGrid, emptyGrid, draftCost } from '../shared/draft.js';
+import {
+  validateDraft, trimToBudget, encodeGrid, emptyGrid, draftCost, clipDraftToZone,
+} from '../shared/draft.js';
 import { encodeSnapshot } from '../shared/protocol.js';
 import { Battle } from './sim.js';
 
@@ -23,7 +25,9 @@ export class Room {
   constructor(code, onEmpty) {
     this.code = code;
     this.onEmpty = onEmpty;
-    this.players = [null, null]; // index = side
+    // Index = side (seat). Seats are kept contiguous: 2 players use 0-1, 3 players 0-2.
+    this.players = Array(MAX_PLAYERS).fill(null);
+    this.layout = 2; // map layout of the current match (2 or 3 zones)
     this.hostToken = null;
     this.settings = defaultSettings();
     this.phase = 'lobby';
@@ -73,6 +77,7 @@ export class Room {
   }
 
   disconnect(p) {
+    if (this.players[p.side] !== p) return; // already removed
     p.connected = false;
     p.conn = null;
     p.dropTimer = setTimeout(() => this.remove(p), RECONNECT_GRACE_MS);
@@ -84,20 +89,26 @@ export class Room {
   }
 
   remove(p) {
+    if (this.players[p.side] !== p) return; // already removed
     clearTimeout(p.dropTimer);
     clearTimeout(p.relayTimer);
     this.players[p.side] = null;
-    if (this.hostToken === p.token) {
-      const other = this.players.find(Boolean);
-      this.hostToken = other ? other.token : null;
-    }
-    if (!this.players.some(Boolean)) {
+    // Close the gap so seats stay contiguous (seat numbers pick the map zones).
+    const left = this.players.filter(Boolean);
+    this.players = Array(MAX_PLAYERS).fill(null);
+    left.forEach((q, i) => { q.side = i; this.players[i] = q; });
+    if (this.hostToken === p.token) this.hostToken = left.length ? left[0].token : null;
+    if (!left.length) {
       this.destroy();
       return;
     }
     // Losing a player mid-game sends everyone back to the lobby.
-    if (this.phase !== 'lobby') this.toLobby('Your opponent left');
+    if (this.phase !== 'lobby') this.toLobby(`${p.name} left the game`);
     else this.broadcastRoom();
+  }
+
+  activePlayers() {
+    return this.players.filter(Boolean);
   }
 
   destroy() {
@@ -111,15 +122,17 @@ export class Room {
 
   /** Bring a newly (re)connected player up to date with whatever phase we're in. */
   welcome(p) {
-    this.send(p, { t: 'joined', token: p.token, side: p.side, room: this.publicState() });
+    this.send(p, { t: 'joined', token: p.token, side: p.side, room: { ...this.publicState(), you: p.side } });
     this.broadcastRoom();
     if (this.phase === 'draw') {
       this.send(p, { t: 'yourDraft', units: p.draft.units, terrain: encodeGrid(p.draft.grid), cost: p.draft.cost });
-      const other = this.players[1 - p.side];
-      if (other && this.settings.visibility === VISIBILITY.VISIBLE) this.relayDraft(other, true);
+      if (this.settings.visibility === VISIBILITY.VISIBLE) {
+        for (const q of this.activePlayers()) if (q !== p) this.sendDraftTo(q, p);
+      }
     } else if (this.phase === 'battle' && this.battle) {
       this.send(p, {
         t: 'battleStart', startsAt: this.battleStartsAt, serverNow: Date.now(), drafts: this.battleDrafts,
+        layout: this.layout, broken: this.battle.broken,
       });
       if (!this.loop && Date.now() >= this.battleStartsAt) this.startLoop();
     }
@@ -143,6 +156,8 @@ export class Room {
     return {
       code: this.code,
       phase: this.phase,
+      // In the lobby this previews the map the current players would get.
+      layout: this.phase === 'lobby' ? layoutFor(this.activePlayers().length) : this.layout,
       settings: this.settings,
       drawDeadline: this.drawDeadline,
       battleStartsAt: this.battleStartsAt,
@@ -161,7 +176,9 @@ export class Room {
   }
 
   broadcastRoom() {
-    this.broadcast({ t: 'room', room: this.publicState() });
+    // Each player is told their own seat, since seats can shift when someone leaves.
+    const room = this.publicState();
+    for (const p of this.players) if (p) this.send(p, { t: 'room', room: { ...room, you: p.side } });
   }
 
   later(fn, ms) {
@@ -189,8 +206,12 @@ export class Room {
         return;
       case 'start':
         if (!this.isHost(p) || this.phase !== 'lobby') return;
-        if (this.players.some((q) => !q || !q.connected)) {
+        if (this.activePlayers().length < 2) {
           this.send(p, { t: 'error', msg: 'Waiting for a second player' });
+          return;
+        }
+        if (this.activePlayers().some((q) => !q.connected)) {
+          this.send(p, { t: 'error', msg: 'Waiting for everyone to reconnect (or kick them)' });
           return;
         }
         this.startDraw();
@@ -202,7 +223,7 @@ export class Room {
         if (this.phase !== 'draw') return;
         p.ready = !!msg.ready;
         this.broadcastRoom();
-        if (this.players.every((q) => q && q.ready)) this.startBattle();
+        if (this.activePlayers().every((q) => q.ready)) this.startBattle();
         return;
       case 'rematch':
         if (!this.isHost(p) || this.phase !== 'results') return;
@@ -216,13 +237,20 @@ export class Room {
       case 'kick':
         if (!this.isHost(p) || this.phase !== 'lobby') return;
         {
-          const other = this.players.find((q) => q && q !== p);
-          if (other) {
+          const other = Number.isInteger(msg.side)
+            ? this.players[msg.side]
+            : this.players.find((q) => q && q !== p);
+          if (other && other !== p) {
             this.send(other, { t: 'kicked' });
             if (other.conn) try { other.conn.close('kicked'); } catch { /* ignore */ }
             this.remove(other);
           }
         }
+        return;
+      case 'leave':
+        // Leaving on purpose frees the seat at once (a dropped connection holds it for a while).
+        this.remove(p);
+        if (p.conn) try { p.conn.close('left'); } catch { /* ignore */ }
         return;
       case 'ping':
         this.send(p, { t: 'pong', id: msg.id, serverNow: Date.now() });
@@ -251,12 +279,14 @@ export class Room {
     this.result = null;
     this.phase = 'draw';
     this.battleStartsAt = 0;
+    this.layout = layoutFor(this.activePlayers().length);
     for (const p of this.players) {
       if (!p) continue;
       p.ready = false;
-      // Keep the last army so players can tweak it, trimmed to the current budget.
-      const t = trimToBudget(p.draft.units, p.draft.grid, this.settings);
-      p.draft = t;
+      // Keep the last army so players can tweak it: clipped to this round's zone
+      // (seats and map can change between rounds) and trimmed to the budget.
+      const c = clipDraftToZone(p.draft.units, p.draft.grid, p.side, this.layout);
+      p.draft = trimToBudget(c.units, c.grid, this.settings);
     }
     this.drawDeadline = this.settings.drawTime > 0 ? Date.now() + this.settings.drawTime * 1000 : 0;
     if (this.drawDeadline) this.later(() => this.startBattle(), this.settings.drawTime * 1000);
@@ -270,9 +300,15 @@ export class Room {
     }
   }
 
+  sendDraftTo(src, dst) {
+    this.send(dst, {
+      t: 'opDraft', side: src.side, units: src.draft.units, terrain: encodeGrid(src.draft.grid),
+    });
+  }
+
   onDraft(p, msg) {
     if (this.phase !== 'draw' || p.ready) return;
-    const v = validateDraft(msg, p.side, this.settings);
+    const v = validateDraft(msg, p.side, this.settings, this.layout);
     if (!v.ok) {
       this.send(p, { t: 'draftReject', reason: v.error });
       return;
@@ -289,17 +325,14 @@ export class Room {
     this.later(() => { this.roomBroadcastPending = false; this.broadcastRoom(); }, 300);
   }
 
-  /** Send a player's draft to their opponent, throttled. */
+  /** Send a player's draft to every other player, throttled. */
   relayDraft(p, immediate = false) {
-    const other = this.players[1 - p.side];
-    if (!other) return;
+    if (this.activePlayers().length < 2) return;
     const now = Date.now();
     const sendIt = () => {
       p.lastRelay = Date.now();
       p.relayTimer = null;
-      this.send(other, {
-        t: 'opDraft', side: p.side, units: p.draft.units, terrain: encodeGrid(p.draft.grid),
-      });
+      for (const q of this.activePlayers()) if (q !== p) this.sendDraftTo(p, q);
     };
     if (immediate || now - p.lastRelay >= RELAY_THROTTLE_MS) { clearTimeout(p.relayTimer); sendIt(); return; }
     if (!p.relayTimer) p.relayTimer = setTimeout(sendIt, RELAY_THROTTLE_MS - (now - p.lastRelay));
@@ -309,7 +342,7 @@ export class Room {
     if (this.phase !== 'draw') return;
     this.clearTimers();
     for (const p of this.players) if (p) clearTimeout(p.relayTimer);
-    const drafts = this.players.map((p) => (p ? p.draft : { units: [], grid: emptyGrid() }));
+    const drafts = this.players.slice(0, this.layout).map((p) => (p ? p.draft : { units: [], grid: emptyGrid() }));
     const seed = (Math.random() * 2 ** 31) | 0;
     this.battle = new Battle({ drafts, settings: this.settings, seed });
     this.phase = 'battle';
@@ -321,6 +354,8 @@ export class Room {
       startsAt: this.battleStartsAt,
       serverNow: Date.now(),
       drafts: this.battleDrafts,
+      layout: this.layout,
+      broken: [],
     });
     this.broadcastRoom();
     // Send one snapshot so clients can render the armies during the countdown.

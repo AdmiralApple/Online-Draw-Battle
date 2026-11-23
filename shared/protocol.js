@@ -6,7 +6,7 @@
 //   u16 unitCount
 //   u16 projectileCount
 //   unitCount x 10 bytes:
-//     u16 id, u8 (type | side<<7), u16 x*32, u16 y*32, u8 hp(0-255), u8 heading(0-255), u8 flags
+//     u16 id, u8 (type | side<<6), u16 x*32, u16 y*32, u8 hp(0-255), u8 heading(0-255), u8 flags
 //   projectileCount x 9 bytes:
 //     u16 id, u8 kind, u16 x*32, u16 y*32, u8 z, u8 angle(0-255)
 
@@ -34,7 +34,7 @@ export function encodeSnapshot(tick, units, projectiles) {
   let o = 9;
   for (const u of units) {
     v.setUint16(o, u.id & 0xffff, true);
-    v.setUint8(o + 2, (u.type & 0x7f) | (u.side << 7));
+    v.setUint8(o + 2, (u.type & 0x3f) | (u.side << 6));
     v.setUint16(o + 3, pos(u.x), true);
     v.setUint16(o + 5, pos(u.y), true);
     v.setUint8(o + 7, Math.max(0, Math.min(255, Math.round((u.hp / u.maxHp) * 255))));
@@ -70,8 +70,8 @@ export function decodeSnapshot(arrayBuffer) {
     const ts = v.getUint8(o + 2);
     const flags = v.getUint8(o + 9);
     units.set(v.getUint16(o, true), {
-      type: ts & 0x7f,
-      side: ts >> 7,
+      type: ts & 0x3f,
+      side: ts >> 6,
       x: v.getUint16(o + 3, true) / 32,
       y: v.getUint16(o + 5, true) / 32,
       hp: v.getUint8(o + 7) / 255,

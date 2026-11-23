@@ -77,12 +77,12 @@ export function draftCost(units, grid, settings) {
  * Clean a draft received from a client. Anything outside the player's zone or
  * inside a wall is dropped. Returns { ok, units, grid, cost, error }.
  */
-export function validateDraft(raw, side, settings) {
+export function validateDraft(raw, side, settings, layout = 2) {
   if (!raw || typeof raw !== 'object') return { ok: false, error: 'Bad draft' };
   const grid = decodeGrid(raw.terrain);
   for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < COLS; c++) {
-      if (grid[r * COLS + c] && !tileInZone(side, c, r)) grid[r * COLS + c] = 0;
+      if (grid[r * COLS + c] && !tileInZone(side, c, r, layout)) grid[r * COLS + c] = 0;
     }
   }
   const units = [];
@@ -94,7 +94,7 @@ export function validateDraft(raw, side, settings) {
     const x = Number(u[1]);
     const y = Number(u[2]);
     if (type < 0 || type >= UNITS.length || !Number.isFinite(x) || !Number.isFinite(y)) continue;
-    if (!inZone(side, x, y)) continue;
+    if (!inZone(side, x, y, 0, layout)) continue;
     const t = TERRAIN[tileAt(grid, x, y)];
     if (t && t.solid) continue;
     units.push([type, Math.round(x * 2) / 2, Math.round(y * 2) / 2]);
@@ -104,6 +104,19 @@ export function validateDraft(raw, side, settings) {
     return { ok: false, error: `Over budget (${cost} / ${settings.budget})`, units, grid, cost };
   }
   return { ok: true, units, grid, cost };
+}
+
+/**
+ * Keep only the parts of a draft inside a zone. Used when a kept army moves to a
+ * different seat or map layout between rounds.
+ */
+export function clipDraftToZone(units, grid, side, layout) {
+  const g = grid.slice();
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) if (g[r * COLS + c] && !tileInZone(side, c, r, layout)) g[r * COLS + c] = 0;
+  }
+  const kept = units.filter(([, x, y]) => inZone(side, x, y, 0, layout));
+  return { units: kept, grid: g };
 }
 
 /** Trim a (possibly over-budget) draft until it fits, dropping the newest units first. */

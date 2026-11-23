@@ -1,7 +1,7 @@
 // Canvas 2D renderer: paper, terrain, decals, units, projectiles and effects.
 
 import {
-  WORLD, COLS, ROWS, UNITS, T, NO_MANS_LAND, zoneOf,
+  WORLD, COLS, ROWS, UNITS, T, zonePolygon, zoneCentre,
 } from '../shared/config.js';
 import { sprite, TEAM, INK } from './sprites.js';
 
@@ -20,6 +20,14 @@ function hash2(a, b) {
   return s - Math.floor(s);
 }
 
+function polyPath(g, poly) {
+  g.moveTo(poly[0][0], poly[0][1]);
+  for (let i = 1; i < poly.length; i++) g.lineTo(poly[i][0], poly[i][1]);
+  g.closePath();
+}
+
+const onWorldEdge = (x, y) => x <= 0.5 || y <= 0.5 || x >= WORLD.width - 0.5 || y >= WORLD.height - 0.5;
+
 function makeCanvas(w, h) {
   const c = document.createElement('canvas');
   c.width = w;
@@ -33,7 +41,8 @@ export class Renderer {
     this.ctx = canvas.getContext('2d');
     this.scale = 1; // css px per world px
     this.dpr = 1;
-    this.paper = this.buildPaper();
+    this.layout = 2;
+    this.paper = this.buildPaper(this.layout);
     this.terrain = makeCanvas(WORLD.width * TS, WORLD.height * TS);
     this.decals = makeCanvas(WORLD.width * TS, WORLD.height * TS);
     this.effects = [];
@@ -74,8 +83,15 @@ export class Renderer {
     };
   }
 
+  /** Switch between the 1v1 (2) and free-for-all (3) map layouts. */
+  setLayout(layout) {
+    if (layout === this.layout) return;
+    this.layout = layout;
+    this.paper = this.buildPaper(layout);
+  }
+
   // --- Static layers ------------------------------------------------------------
-  buildPaper() {
+  buildPaper(layout) {
     const c = makeCanvas(WORLD.width * TS, WORLD.height * TS);
     const g = c.getContext('2d');
     g.scale(TS, TS);
@@ -93,26 +109,33 @@ export class Renderer {
     g.lineWidth = 1;
     for (let x = 0; x <= WORLD.width; x += 40) { g.beginPath(); g.moveTo(x + 0.5, 0); g.lineTo(x + 0.5, WORLD.height); g.stroke(); }
     for (let y = 0; y <= WORLD.height; y += 40) { g.beginPath(); g.moveTo(0, y + 0.5); g.lineTo(WORLD.width, y + 0.5); g.stroke(); }
-    // No man's land hatch
-    const x0 = WORLD.width / 2 - NO_MANS_LAND / 2;
+    // No man's land hatch: everywhere outside the players' zones.
+    const zones = Array.from({ length: layout }, (_, side) => zonePolygon(side, layout));
     g.save();
     g.beginPath();
-    g.rect(x0, 0, NO_MANS_LAND, WORLD.height);
-    g.clip();
+    g.rect(0, 0, WORLD.width, WORLD.height);
+    for (const z of zones) polyPath(g, z);
+    g.clip('evenodd');
     g.strokeStyle = 'rgba(43,38,34,0.07)';
     g.lineWidth = 2;
-    for (let k = -WORLD.height; k < NO_MANS_LAND + WORLD.height; k += 14) {
+    for (let k = 0; k < WORLD.width + WORLD.height; k += 14) {
       g.beginPath();
-      g.moveTo(x0 + k, 0);
-      g.lineTo(x0 + k - WORLD.height, WORLD.height);
+      g.moveTo(k, 0);
+      g.lineTo(k - WORLD.height, WORLD.height);
       g.stroke();
     }
     g.restore();
+    // Dashed zone borders (skipping edges that run along the map edge).
     g.strokeStyle = 'rgba(43,38,34,0.18)';
     g.setLineDash([6, 8]);
     g.lineWidth = 1.5;
-    for (const x of [x0, x0 + NO_MANS_LAND]) {
-      g.beginPath(); g.moveTo(x, 0); g.lineTo(x, WORLD.height); g.stroke();
+    for (const z of zones) {
+      for (let i = 0; i < z.length; i++) {
+        const a = z[i];
+        const b = z[(i + 1) % z.length];
+        if (onWorldEdge(a[0], a[1]) && onWorldEdge(b[0], b[1]) && (a[0] === b[0] || a[1] === b[1])) continue;
+        g.beginPath(); g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); g.stroke();
+      }
     }
     return c;
   }
@@ -228,6 +251,21 @@ export class Renderer {
       case 'heal':
         this.effects.push({ k: 'plus', x: ev.x, y: ev.y - 6, t0: now, life: 0.7 });
         break;
+      case 'chip':
+        for (let i = 0; i < 3; i++) {
+          const a = Math.random() * Math.PI * 2;
+          this.effects.push({ k: 'dot', x: ev.x, y: ev.y, vx: Math.cos(a) * 50, vy: Math.sin(a) * 50, t0: now, life: 0.35, c: '#6b6f76' });
+        }
+        break;
+      case 'wall':
+        this.splat(ev.x, ev.y, '#6b6f76', 6, 0.35);
+        for (let i = 0; i < 7; i++) {
+          const a = Math.random() * Math.PI * 2;
+          const v = 40 + Math.random() * 60;
+          this.effects.push({ k: 'dot', x: ev.x, y: ev.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, t0: now, life: 0.5, c: '#4a4e55' });
+        }
+        this.shake = Math.min(6, this.shake + 0.6);
+        break;
       case 'lob':
         this.effects.push({ k: 'ring', x: ev.x, y: ev.y, r0: 2, r1: 9, t0: now, life: 0.3, c: 'rgba(80,80,80,0.6)', w: 1.5 });
         break;
@@ -271,10 +309,11 @@ export class Renderer {
     ctx.drawImage(this.paper, 0, 0, WORLD.width, WORLD.height);
 
     if (view.showZones) {
-      const z = zoneOf(view.mySide);
       ctx.fillStyle = TEAM[view.mySide].light;
       ctx.globalAlpha = 0.16;
-      ctx.fillRect(z.x0, z.y0, z.x1 - z.x0, z.y1 - z.y0);
+      ctx.beginPath();
+      polyPath(ctx, zonePolygon(view.mySide, this.layout));
+      ctx.fill();
       ctx.globalAlpha = 1;
     }
 
@@ -286,7 +325,7 @@ export class Renderer {
     ctx.setTransform(k, 0, 0, k, sx * k, sy * k);
     this.drawEffects(now / 1000, dt);
 
-    if (view.fog >= 0) this.drawFog(view.fog);
+    if (view.fog) this.drawFog(view.mySide);
     if (view.brush) this.drawBrush(view.brush);
   }
 
@@ -426,28 +465,35 @@ export class Renderer {
     this.effects = keep;
   }
 
-  drawFog(side) {
+  /** Hidden drawing: cover every other player's zone. */
+  drawFog(mySide) {
     const ctx = this.ctx;
-    const z = zoneOf(side);
-    ctx.fillStyle = 'rgba(236,230,216,0.92)';
-    ctx.fillRect(z.x0, z.y0, z.x1 - z.x0, z.y1 - z.y0);
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(z.x0, z.y0, z.x1 - z.x0, z.y1 - z.y0);
-    ctx.clip();
-    ctx.strokeStyle = 'rgba(43,38,34,0.06)';
-    ctx.lineWidth = 3;
-    for (let k = -WORLD.height; k < z.x1 - z.x0 + WORLD.height; k += 22) {
+    for (let side = 0; side < this.layout; side++) {
+      if (side === mySide) continue;
+      const z = zonePolygon(side, this.layout);
+      ctx.save();
       ctx.beginPath();
-      ctx.moveTo(z.x0 + k, 0);
-      ctx.lineTo(z.x0 + k + WORLD.height, WORLD.height);
-      ctx.stroke();
+      polyPath(ctx, z);
+      ctx.fillStyle = 'rgba(236,230,216,0.92)';
+      ctx.fill();
+      ctx.clip();
+      ctx.strokeStyle = 'rgba(43,38,34,0.06)';
+      ctx.lineWidth = 3;
+      for (let k = -WORLD.height; k < WORLD.width; k += 22) {
+        ctx.beginPath();
+        ctx.moveTo(k, 0);
+        ctx.lineTo(k + WORLD.height, WORLD.height);
+        ctx.stroke();
+      }
+      ctx.restore();
+      const [cx, cy] = zoneCentre(side, this.layout);
+      ctx.fillStyle = TEAM[side].dark;
+      ctx.globalAlpha = 0.6;
+      ctx.font = `${this.layout > 2 ? 22 : 28}px "Patrick Hand", "Comic Sans MS", cursive`;
+      ctx.textAlign = 'center';
+      ctx.fillText('Drawing in secret…', cx, cy);
+      ctx.globalAlpha = 1;
     }
-    ctx.restore();
-    ctx.fillStyle = 'rgba(43,38,34,0.45)';
-    ctx.font = '28px "Patrick Hand", "Comic Sans MS", cursive';
-    ctx.textAlign = 'center';
-    ctx.fillText('Opponent is drawing in secret…', (z.x0 + z.x1) / 2, WORLD.height / 2);
   }
 
   drawBrush(b) {

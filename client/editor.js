@@ -25,8 +25,9 @@ function segDist(px, py, x0, y0, x1, y1) {
 }
 
 export class Editor {
-  constructor(side, settings) {
+  constructor(side, settings, layout = 2) {
     this.side = side;
+    this.layout = layout; // map layout (2 or 3 zones)
     this.settings = settings;
     this.units = []; // {type, x, y}
     this.grid = emptyGrid();
@@ -108,7 +109,7 @@ export class Editor {
 
   canPlaceAt(x, y, type) {
     const r = UNITS[type].radius;
-    if (!inZone(this.side, x, y, r)) return false;
+    if (!inZone(this.side, x, y, r, this.layout)) return false;
     const t = TERRAIN[tileAt(this.grid, x, y)];
     if (t && t.solid) return false;
     return !this.tooClose(x, y, type);
@@ -236,7 +237,7 @@ export class Editor {
     const newCost = this.terrainCost(id);
     const touched = [];
     this.forTilesInSeg(x0, y0, x1, y1, this.radius, (i, col, row) => {
-      if (this.grid[i] === id || !tileInZone(this.side, col, row)) return;
+      if (this.grid[i] === id || !tileInZone(this.side, col, row, this.layout)) return;
       const delta = newCost - this.terrainCost(this.grid[i]);
       if (this.cost + delta > this.budget + 1e-6) { this.blockedReason = 'Out of budget'; return; }
       this.grid[i] = id;
@@ -274,6 +275,6 @@ export class Editor {
   /** Can the current tool do anything at this point? Used for the brush cursor. */
   pointOk(x, y) {
     if (this.tool.kind === 'erase') return true;
-    return inZone(this.side, x, y);
+    return inZone(this.side, x, y, 0, this.layout);
   }
 }

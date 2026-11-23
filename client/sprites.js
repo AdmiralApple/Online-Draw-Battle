@@ -7,6 +7,7 @@ export const INK = '#2b2622';
 export const TEAM = [
   { main: '#2a9d8f', dark: '#1d6f66', light: '#9fd8cf', name: 'Teal' },
   { main: '#e76f51', dark: '#a9472f', light: '#f6bba8', name: 'Coral' },
+  { main: '#8e5fb5', dark: '#5f3b80', light: '#d3bce6', name: 'Plum' },
 ];
 
 const SPR = 4; // sprite pixels per world pixel

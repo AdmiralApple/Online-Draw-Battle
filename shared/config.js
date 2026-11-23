@@ -14,26 +14,94 @@ export const MAX_UNITS_PER_PLAYER = 700;
 // Neutral strip in the middle of the map where nobody may draw.
 export const NO_MANS_LAND = 120;
 
-export const SIDE_NAMES = ['Teal', 'Coral'];
+export const SIDE_NAMES = ['Teal', 'Coral', 'Plum'];
+export const MAX_PLAYERS = 3;
 
-/** Drawable x-range for a side (0 = left, 1 = right). */
-export function zoneOf(side) {
-  const half = WORLD.width / 2;
-  const gap = NO_MANS_LAND / 2;
-  return side === 0
-    ? { x0: 0, x1: half - gap, y0: 0, y1: WORLD.height }
-    : { x0: half + gap, x1: WORLD.width, y0: 0, y1: WORLD.height };
+// ---------------------------------------------------------------------------
+// Map layouts. The layout is picked by how many players are in the match:
+//   2 players: left / right halves.
+//   3 players: three regions meeting at MEET: one along the top, one bottom-left,
+//              one bottom-right. Every pair shares a border. MEET is placed so the
+//              three drawable areas come out equal (about 26% of the map each).
+// Each drawing zone is convex, written as half-planes [nx, ny, d] meaning
+// nx*x + ny*y >= d. Borders between zones are pulled back by NO_MANS_LAND / 2.
+// ---------------------------------------------------------------------------
+const G = NO_MANS_LAND / 2;
+const HALF_W = WORLD.width / 2;
+const MEET_Y = 510;
+// Unit normal (a, b) of the border from MEET to the top-left corner; mirrored for top-right.
+const NL = Math.hypot(HALF_W, MEET_Y);
+const NA = MEET_Y / NL;
+const NB = HALF_W / NL;
+const RIGHT_D = NA * WORLD.width; // border to the top-right corner: NA*x + NB*y = RIGHT_D
+const LAYOUTS = {
+  2: [
+    [[-1, 0, -(HALF_W - G)]], // left half
+    [[1, 0, HALF_W + G]], // right half
+  ],
+  3: [
+    [[NA, -NB, G], [-NA, -NB, G - RIGHT_D]], // top
+    [[-NA, NB, G], [-1, 0, -(HALF_W - G)]], // bottom-left
+    [[NA, NB, RIGHT_D + G], [1, 0, HALF_W + G]], // bottom-right
+  ],
+};
+
+/** Number of player zones for a match with `players` players (2 or 3). */
+export function layoutFor(players) {
+  return players >= 3 ? 3 : 2;
 }
 
-export function inZone(side, x, y, margin = 0) {
-  const z = zoneOf(side);
-  return x >= z.x0 + margin && x <= z.x1 - margin && y >= z.y0 + margin && y <= z.y1 - margin;
+export function inZone(side, x, y, margin = 0, layout = 2) {
+  if (x < margin || y < margin || x > WORLD.width - margin || y > WORLD.height - margin) return false;
+  const zone = LAYOUTS[layoutFor(layout)][side];
+  if (!zone) return false;
+  for (const [nx, ny, d] of zone) if (nx * x + ny * y < d + margin) return false;
+  return true;
 }
 
-export function tileInZone(side, col, row) {
+export function tileInZone(side, col, row, layout = 2) {
   const x = (col + 0.5) * WORLD.tile;
   const y = (row + 0.5) * WORLD.tile;
-  return inZone(side, x, y);
+  return inZone(side, x, y, 0, layout);
+}
+
+/** Outline of a side's drawing zone as [[x, y], ...] (the world rect clipped by its half-planes). */
+export function zonePolygon(side, layout = 2) {
+  let poly = [[0, 0], [WORLD.width, 0], [WORLD.width, WORLD.height], [0, WORLD.height]];
+  const zone = LAYOUTS[layoutFor(layout)][side] || [];
+  for (const [nx, ny, d] of zone) {
+    const out = [];
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i];
+      const b = poly[(i + 1) % poly.length];
+      const da = nx * a[0] + ny * a[1] - d;
+      const db = nx * b[0] + ny * b[1] - d;
+      if (da >= 0) out.push(a);
+      if ((da >= 0) !== (db >= 0)) {
+        const t = da / (da - db);
+        out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+      }
+    }
+    poly = out;
+  }
+  return poly;
+}
+
+/** Centroid of a zone, e.g. for labels. */
+export function zoneCentre(side, layout = 2) {
+  const p = zonePolygon(side, layout);
+  let a = 0;
+  let cx = 0;
+  let cy = 0;
+  for (let i = 0; i < p.length; i++) {
+    const [x0, y0] = p[i];
+    const [x1, y1] = p[(i + 1) % p.length];
+    const f = x0 * y1 - x1 * y0;
+    a += f;
+    cx += (x0 + x1) * f;
+    cy += (y0 + y1) * f;
+  }
+  return a ? [cx / (3 * a), cy / (3 * a)] : [WORLD.width / 2, WORLD.height / 2];
 }
 
 // ---------------------------------------------------------------------------

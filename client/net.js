@@ -373,7 +373,10 @@ export class GuestNet extends BaseNet {
     if (this.closed) return;
     this.closed = true;
     this.queue.length = 0;
-    this.cleanup();
+    // Give a final message ("leave") a moment to go out before closing the channel.
+    clearInterval(this.pingTimer);
+    clearTimeout(this.retryTimer);
+    setTimeout(() => this.cleanup(), this.connected ? 250 : 0);
   }
 }
 

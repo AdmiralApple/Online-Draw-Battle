@@ -2,6 +2,7 @@
 
 import {
   UNITS, TERRAIN, TICK_RATE, COLS, ROWS, VISIBILITY, defaultSettings, MAX_UNITS_PER_PLAYER,
+  WORLD,
 } from '../shared/config.js';
 import { decodeGrid, emptyGrid } from '../shared/draft.js';
 import { HostNet, GuestNet, SnapshotBuffer } from './net.js';
@@ -38,7 +39,8 @@ const state = {
   phase: null,
   skew: 0, // serverNow - Date.now()
   editor: null,
-  opDraft: null, // { units, grid }
+  opDrafts: {}, // side -> { units, grid } of other players (visible mode)
+  battleGrid: null, // terrain during a battle (wall tiles can break)
   result: null,
   battleStartsLocal: 0,
   tab: 'units',
@@ -56,6 +58,7 @@ const state = {
 };
 
 const snaps = new SnapshotBuffer(1000 / TICK_RATE, 110);
+const faceCentre = (x, y) => Math.atan2(WORLD.height / 2 - y, WORLD.width / 2 - x);
 let renderer = null;
 
 // ---------------------------------------------------------------------------
@@ -160,7 +163,7 @@ function onMessage(msg) {
       state.sentVersion = state.editor.version;
       break;
     case 'opDraft':
-      state.opDraft = { units: msg.units, grid: decodeGrid(msg.terrain) };
+      state.opDrafts[msg.side] = { units: msg.units, grid: decodeGrid(msg.terrain) };
       state.opTerrainVersion++;
       break;
     case 'draftReject':
@@ -199,6 +202,7 @@ function show(screen) {
 }
 
 function goHome() {
+  if (net && !state.hosting && net.connected) net.send({ t: 'leave' });
   net?.close();
   net = null;
   hosting.set(null);
@@ -209,20 +213,24 @@ function goHome() {
   state.room = null;
   state.phase = null;
   state.editor = null;
-  state.opDraft = null;
+  state.opDrafts = {};
   $('connBanner').hidden = true;
   history.replaceState(null, '', location.pathname);
   show('home');
 }
 
 function me() { return state.room?.players[state.side] || null; }
-function opp() { return state.room?.players[1 - state.side] || null; }
+/** The other players in the room. */
+function others() { return (state.room?.players || []).filter((p, i) => p && i !== state.side); }
 function amHost() { return !!me()?.host; }
 
 function applyRoom(room) {
   const prev = state.phase;
   state.room = room;
   state.phase = room.phase;
+  // Seats can shift when someone leaves, so the room tells each player theirs.
+  if (Number.isInteger(room.you)) state.side = room.you;
+  if (renderer) renderer.setLayout(room.layout || 2);
   state.skew = room.serverNow - Date.now();
   if (room.players[state.side]?.host) store.set('ss-rules', JSON.stringify(room.settings));
   if (room.result) state.result = room.result;
@@ -236,11 +244,11 @@ function applyRoom(room) {
 
 function enterPhase(phase) {
   if (phase === 'lobby') {
-    state.opDraft = null;
+    state.opDrafts = {};
   } else if (phase === 'draw') {
     ensureEditor();
     state.editor.locked = false;
-    state.opDraft = null;
+    state.opDrafts = {};
     state.terrainShown = -1;
     state.resultsCollapsed = false;
     snaps.reset();
@@ -252,8 +260,9 @@ function enterPhase(phase) {
 }
 
 function ensureEditor() {
-  if (!state.editor || state.editor.side !== state.side) {
-    state.editor = new Editor(state.side, state.room.settings);
+  const layout = state.room.layout || 2;
+  if (!state.editor || state.editor.side !== state.side || state.editor.layout !== layout) {
+    state.editor = new Editor(state.side, state.room.settings, layout);
     state.editor.radius = Number($('brushSize').value);
     state.sentVersion = -1;
   }
@@ -374,9 +383,13 @@ function renderLobby() {
   const host = amHost();
   $('lobbyCode').textContent = room.code;
 
+  const count = room.players.filter(Boolean).length;
+  $('mapTag').textContent = room.layout === 3 ? '1v1v1 map' : '1v1 map';
   const list = $('playerList');
   list.innerHTML = '';
   room.players.forEach((p, side) => {
+    // Show the third seat only once two players are in (it's the free-for-all seat).
+    if (!p && side > count) return;
     const li = document.createElement('li');
     if (p) {
       li.className = 'filled';
@@ -399,21 +412,30 @@ function renderLobby() {
         const kick = document.createElement('button');
         kick.className = 'btn small ghost';
         kick.textContent = 'Kick';
-        kick.onclick = () => send({ t: 'kick' });
+        kick.onclick = () => send({ t: 'kick', side });
         li.appendChild(kick);
       }
     } else {
-      li.innerHTML = `<span class="swatch s${side}" style="opacity:.3"></span><span class="hint">Waiting for a friend… share the invite link</span>`;
+      const text = side < 2
+        ? 'Waiting for a friend… share the invite link'
+        : 'Room for one more: a third player makes it a free-for-all';
+      li.innerHTML = `<span class="swatch s${side}" style="opacity:.3"></span><span class="hint"></span>`;
+      li.querySelector('.hint').textContent = text;
     }
     list.appendChild(li);
   });
 
-  const full = room.players.every((p) => p && p.connected);
+  const present = room.players.filter(Boolean);
+  const canStart = present.length >= 2 && present.every((p) => p.connected);
   $('startBtn').hidden = !host;
-  $('startBtn').disabled = !full;
-  $('startHint').textContent = host
-    ? (full ? 'Both players are here. Start whenever you like.' : 'You need a second player to start.')
-    : 'Waiting for the host to start…';
+  $('startBtn').disabled = !canStart;
+  let hint;
+  if (!host) hint = 'Waiting for the host to start…';
+  else if (present.length < 2) hint = 'You need a second player to start.';
+  else if (!canStart) hint = 'Waiting for everyone to reconnect (or kick them).';
+  else if (present.length === 2) hint = 'Ready for a 1v1. Start now, or wait for a third player for a free-for-all.';
+  else hint = 'Three players: free-for-all on the 1v1v1 map. Start whenever you like.';
+  $('startHint').textContent = hint;
 
   $('rulesWho').textContent = host ? "(you're the host)" : '(set by the host)';
   const s = room.settings;
@@ -445,7 +467,8 @@ function updateGameChrome() {
   const vs = $('vsLabel');
   vs.innerHTML = '';
   room.players.forEach((p, i) => {
-    if (i === 1) vs.append(' vs ');
+    if (!p && i >= (room.layout || 2)) return;
+    if (i > 0) vs.append(' vs ');
     const s = document.createElement('span');
     s.className = `s${i}`;
     s.textContent = p ? p.name : '…';
@@ -461,15 +484,16 @@ function updateGameChrome() {
     const btn = $('readyBtn');
     btn.textContent = ready ? 'Ready! (click to edit)' : 'Ready!';
     btn.classList.toggle('ready-on', ready);
-    const o = opp();
+    const rest = others();
+    const waiting = rest.filter((p) => !p.ready).map((p) => p.name);
+    const done = rest.filter((p) => p.ready).map((p) => p.name);
     $('readyHint').textContent = ready
-      ? `Waiting for ${o ? o.name : 'opponent'}…`
-      : o && o.ready ? `${o.name} is ready!` : '';
+      ? (waiting.length ? `Waiting for ${waiting.join(' and ')}…` : '')
+      : done.length ? `${done.join(' and ')} ${done.length > 1 ? 'are' : 'is'} ready!` : '';
   }
   if (phase === 'results') renderResults(); else $('results').hidden = true;
   if (phase !== 'battle') $('countdown').hidden = true;
-  $('battleHud').querySelector('.s0 .hud-name').textContent = room.players[0]?.name || '';
-  $('battleHud').querySelector('.hud-side.s1 .hud-name').textContent = room.players[1]?.name || '';
+  buildHud(room);
   if (renderer) renderer.resize();
 }
 
@@ -563,7 +587,7 @@ function renderResults() {
   if (r.winner === -1) h.textContent = "It's a draw!";
   else {
     h.textContent = `${name(r.winner)} wins!`;
-    h.style.color = r.winner === 0 ? 'var(--teal-dark)' : 'var(--coral-dark)';
+    h.style.color = TEAM[r.winner].dark;
   }
   el.appendChild(h);
   const reason = document.createElement('p');
@@ -571,12 +595,15 @@ function renderResults() {
   reason.textContent = `${r.reason} after ${Math.floor(r.time / 60)}:${String(r.time % 60).padStart(2, '0')}`;
   el.appendChild(reason);
   const table = document.createElement('table');
+  const sides = r.sides || r.start.length || 2;
   const head = document.createElement('tr');
-  head.innerHTML = '<th></th><th></th><th></th>';
-  head.children[1].textContent = name(0);
-  head.children[1].style.color = 'var(--teal-dark)';
-  head.children[2].textContent = name(1);
-  head.children[2].style.color = 'var(--coral-dark)';
+  head.appendChild(document.createElement('th'));
+  for (let i = 0; i < sides; i++) {
+    const th = document.createElement('th');
+    th.textContent = name(i);
+    th.style.color = TEAM[i].dark;
+    head.appendChild(th);
+  }
   table.appendChild(head);
   const rows = [
     ['Units drawn', r.start], ['Survivors', r.survivors], ['Kills', r.kills],
@@ -584,7 +611,7 @@ function renderResults() {
   ];
   for (const [label, v] of rows) {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${label}</td><td>${v[0]}</td><td>${v[1]}</td>`;
+    tr.innerHTML = `<td>${label}</td>${Array.from({ length: sides }, (_, i) => `<td>${v[i] ?? 0}</td>`).join('')}`;
     table.appendChild(tr);
   }
   el.appendChild(table);
@@ -764,11 +791,14 @@ function initCanvas() {
 // Battle
 // ---------------------------------------------------------------------------
 function startBattleView(msg) {
+  renderer.setLayout(msg.layout || msg.drafts.length);
   const grid = emptyGrid();
   for (const d of msg.drafts) {
     const g = decodeGrid(d.terrain);
     for (let i = 0; i < grid.length; i++) if (g[i]) grid[i] = g[i];
   }
+  for (const i of msg.broken || []) grid[i] = 0; // walls already broken (rejoining mid-battle)
+  state.battleGrid = grid;
   renderer.setTerrain(grid);
   state.terrainShown = -2; // battle terrain, don't overwrite with draft terrain
   renderer.clearDecals();
@@ -779,7 +809,7 @@ function startBattleView(msg) {
   if (state.editor) state.editor.locked = true;
   // Show the armies straight away while the countdown runs.
   state.battlePreview = msg.drafts.map((d, side) => d.units.map(([type, x, y]) => ({
-    type, side, x, y, heading: side === 0 ? 0 : Math.PI, attack: 0, hp: 1,
+    type, side, x, y, heading: faceCentre(x, y), attack: 0, hp: 1,
   }))).flat();
 }
 
@@ -790,14 +820,17 @@ function draftUnitsView() {
   const ed = state.editor;
   const list = [];
   const vis = state.room.settings.visibility === VISIBILITY.VISIBLE;
-  if (vis && state.opDraft) {
-    const os = 1 - state.side;
-    for (const [type, x, y] of state.opDraft.units) {
-      list.push({ type, side: os, x, y, heading: os === 0 ? 0 : Math.PI, attack: 0, ghost: 0.75 });
+  if (vis) {
+    for (const [os, d] of Object.entries(state.opDrafts)) {
+      const side = Number(os);
+      if (side === state.side) continue;
+      for (const [type, x, y] of d.units) {
+        list.push({ type, side, x, y, heading: faceCentre(x, y), attack: 0, ghost: 0.75 });
+      }
     }
   }
   for (const u of ed.units) {
-    list.push({ type: u.type, side: state.side, x: u.x, y: u.y, heading: state.side === 0 ? 0 : Math.PI, attack: 0 });
+    list.push({ type: u.type, side: state.side, x: u.x, y: u.y, heading: faceCentre(u.x, u.y), attack: 0 });
   }
   return list;
 }
@@ -808,10 +841,13 @@ function draftTerrain() {
   const key = ed.terrainVersion * 1000 + (vis ? state.opTerrainVersion : 0);
   if (key === state.terrainShown) return;
   state.terrainShown = key;
-  if (vis && state.opDraft) {
+  const drafts = Object.entries(state.opDrafts).filter(([os]) => Number(os) !== state.side);
+  if (vis && drafts.length) {
     const g = ed.grid.slice();
-    const og = state.opDraft.grid;
-    for (let i = 0; i < g.length; i++) if (og[i]) g[i] = og[i];
+    for (const [, d] of drafts) {
+      const og = d.grid;
+      for (let i = 0; i < g.length; i++) if (og[i]) g[i] = og[i];
+    }
     renderer.setTerrain(g);
   } else {
     renderer.setTerrain(ed.grid);
@@ -827,19 +863,56 @@ function setTimer(text, urgent = false) {
 const mmss = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 
 let lastHud = '';
+let hudKey = '';
+/** (Re)build the battle HUD for 2 or 3 sides: names, unit counts and a strength bar. */
+function buildHud(room) {
+  const n = room.layout || 2;
+  const names = Array.from({ length: n }, (_, i) => room.players[i]?.name || TEAM[i].name);
+  const key = `${n}|${names.join('|')}`;
+  if (key === hudKey) return;
+  hudKey = key;
+  lastHud = '';
+  const hud = $('battleHud');
+  hud.innerHTML = '';
+  hud.classList.toggle('ffa', n > 2);
+  const sideEl = (i, countFirst) => {
+    const d = document.createElement('div');
+    d.className = `hud-side s${i}`;
+    const nm = document.createElement('span');
+    nm.className = 'hud-name';
+    nm.textContent = names[i];
+    const ct = document.createElement('span');
+    ct.className = 'hud-count';
+    d.append(...(countFirst ? [ct, nm] : [nm, ct]));
+    return d;
+  };
+  const bar = document.createElement('div');
+  bar.className = 'hud-bar';
+  for (let i = 0; i < n; i++) {
+    const f = document.createElement('div');
+    f.className = `hud-fill s${i}`;
+    bar.appendChild(f);
+  }
+  // 1v1: name | bar | name. Free-for-all: the three names, then the bar.
+  if (n === 2) hud.append(sideEl(0, false), bar, sideEl(1, true));
+  else { for (let i = 0; i < n; i++) hud.appendChild(sideEl(i, false)); hud.appendChild(bar); }
+}
+
 function updateHud(units) {
-  let a = 0;
-  let b = 0;
-  for (const u of units) if (u.side === 0) a++; else b++;
-  const key = `${a}|${b}`;
+  const n = state.room?.layout || 2;
+  const counts = new Array(n).fill(0);
+  for (const u of units) if (u.side < n) counts[u.side]++;
+  const key = counts.join('|');
   if (key === lastHud) return;
   lastHud = key;
   const hud = $('battleHud');
-  hud.querySelector('.hud-side.s0 .hud-count').textContent = a;
-  hud.querySelector('.hud-side.s1 .hud-count').textContent = b;
-  const tot = Math.max(1, a + b);
-  hud.querySelector('.hud-fill.s0').style.width = `${(a / tot) * 100}%`;
-  hud.querySelector('.hud-fill.s1').style.width = `${(b / tot) * 100}%`;
+  const tot = Math.max(1, counts.reduce((a, b) => a + b, 0));
+  counts.forEach((c, i) => {
+    const ct = hud.querySelector(`.hud-side.s${i} .hud-count`);
+    if (ct) ct.textContent = c;
+    const f = hud.querySelector(`.hud-fill.s${i}`);
+    if (f) f.style.width = `${(c / tot) * 100}%`;
+  });
 }
 
 function frame() {
@@ -864,7 +937,7 @@ function frame() {
     }
     renderer.frame({
       mode: 'draw', mySide: state.side, units: draftUnitsView(), projectiles: [],
-      fog: hidden ? 1 - state.side : -1, brush, showZones: true,
+      fog: hidden, brush, showZones: true,
     });
     const dl = state.room.drawDeadline;
     if (dl) {
@@ -875,12 +948,17 @@ function frame() {
   }
 
   // Battle / results
-  for (const ev of snaps.takeDueEvents(snaps.renderTick())) renderer.addEvent(ev);
+  let wallsBroke = false;
+  for (const ev of snaps.takeDueEvents(snaps.renderTick())) {
+    renderer.addEvent(ev);
+    if (ev.k === 'wall' && state.battleGrid) { state.battleGrid[ev.i] = 0; wallsBroke = true; }
+  }
+  if (wallsBroke) renderer.setTerrain(state.battleGrid);
   const sample = snaps.sample();
   let units = sample ? sample.units : (state.battlePreview || []);
   const projectiles = sample ? sample.projectiles : [];
   if (!sample && phase === 'results') units = [];
-  renderer.frame({ mode: 'battle', mySide: state.side, units, projectiles, fog: -1, brush: null, showZones: false });
+  renderer.frame({ mode: 'battle', mySide: state.side, units, projectiles, fog: false, brush: null, showZones: false });
   updateHud(units);
 
   if (phase === 'battle') {
