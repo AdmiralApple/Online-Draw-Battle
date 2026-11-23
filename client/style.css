@@ -75,6 +75,7 @@ h2 small, h3 small { font-family: var(--ui); font-size: 12px; color: var(--ink-s
 .btn.big { font-size: 22px; padding: 8px 20px; }
 .btn.small { font-size: 15px; padding: 3px 10px; }
 .btn.ghost { background: transparent; box-shadow: none; border-style: dashed; }
+.btn.armed { background: #e76f51; color: #fff; border-style: solid; }
 .btn.active { background: var(--ink); color: var(--paper); }
 .btn.ready-on { background: #7cc36a; }
 

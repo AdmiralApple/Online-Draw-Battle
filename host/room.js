@@ -209,8 +209,9 @@ export class Room {
         this.startDraw();
         return;
       case 'lobby':
-        if (!this.isHost(p) || (this.phase !== 'results' && this.phase !== 'draw')) return;
-        this.toLobby();
+        // Either player can leave the battlefield; it sends both back to the lobby.
+        if (this.phase === 'lobby') return;
+        this.toLobby(this.phase === 'results' ? null : `${p.name} exited to the lobby`);
         return;
       case 'kick':
         if (!this.isHost(p) || this.phase !== 'lobby') return;

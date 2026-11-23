@@ -179,8 +179,16 @@ try {
   ok('reconnect with token restores seat and draft');
 
   // Back to lobby, then kick.
-  a.send({ t: 'lobby' });
+  // The guest can exit mid-battle; both go back to the lobby.
+  b2.send({ t: 'draft', units: army(1, ['militia'], 5), terrain: encodeGrid(emptyGrid()) });
+  await b2.wait((m) => m.t === 'draftAck', 'draftAck');
+  a.send({ t: 'ready', ready: true });
+  b2.send({ t: 'ready', ready: true });
+  await a.wait((m) => m.t === 'battleStart', 'second battleStart');
+  b2.send({ t: 'lobby' });
+  const exitNote = await a.wait((m) => m.t === 'notice', 'exit notice');
   await a.wait((m) => m.t === 'room' && m.room.phase === 'lobby', 'lobby');
+  ok(`guest exited mid-battle: "${exitNote.msg}"`);
   a.send({ t: 'kick' });
   await b2.wait((m) => m.t === 'kicked', 'kicked');
   if (!b2.closed) fail('kicked player not disconnected');

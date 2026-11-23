@@ -52,10 +52,18 @@ export class Renderer {
     this.dpr = window.devicePixelRatio || 1;
     const cssW = Math.floor(WORLD.width * this.scale);
     const cssH = Math.floor(WORLD.height * this.scale);
+    const pw = Math.floor(cssW * this.dpr);
+    const ph = Math.floor(cssH * this.dpr);
+    // Assigning canvas.width clears the canvas, even to the same value. Doing that between
+    // animation frames shows a blank board for a frame (flicker), so only touch it on change.
+    if (this.canvas.width === pw && this.canvas.height === ph && this.cssW === cssW && this.cssH === cssH) return;
+    this.cssW = cssW;
+    this.cssH = cssH;
     this.canvas.style.width = `${cssW}px`;
     this.canvas.style.height = `${cssH}px`;
-    this.canvas.width = Math.floor(cssW * this.dpr);
-    this.canvas.height = Math.floor(cssH * this.dpr);
+    this.canvas.width = pw;
+    this.canvas.height = ph;
+    if (this.lastView) this.frame(this.lastView); // repaint now instead of waiting a frame
   }
 
   toWorld(clientX, clientY) {
@@ -240,6 +248,7 @@ export class Renderer {
    * }
    */
   frame(view) {
+    this.lastView = view;
     const now = performance.now();
     const dt = Math.min(0.05, (now - this.lastFrame) / 1000);
     this.lastFrame = now;

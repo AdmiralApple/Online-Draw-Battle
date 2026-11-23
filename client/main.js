@@ -451,7 +451,7 @@ function updateGameChrome() {
     s.textContent = p ? p.name : '…';
     vs.appendChild(s);
   });
-  $('toLobbyBtn').hidden = !(amHost() && (phase === 'draw' || phase === 'results'));
+  $('toLobbyBtn').hidden = false;
   $('palette').hidden = phase !== 'draw';
   $('battleHud').hidden = phase === 'draw';
   $('stage').classList.toggle('locked', phase !== 'draw' || !!me()?.ready);
@@ -647,7 +647,28 @@ function initPalette() {
     if (!ready) flushDraft();
     send({ t: 'ready', ready: !ready });
   });
-  $('toLobbyBtn').addEventListener('click', () => send({ t: 'lobby' }));
+  // Exit the battlefield. Mid-match it ends things for both players, so ask for a second click.
+  {
+    const btn = $('toLobbyBtn');
+    let armedUntil = 0;
+    let resetTimer = null;
+    btn.addEventListener('click', () => {
+      const midMatch = state.phase === 'draw' || state.phase === 'battle';
+      if (midMatch && Date.now() > armedUntil) {
+        armedUntil = Date.now() + 3000;
+        btn.textContent = 'Click again to exit';
+        btn.classList.add('armed');
+        clearTimeout(resetTimer);
+        resetTimer = setTimeout(() => { btn.textContent = 'Exit to lobby'; btn.classList.remove('armed'); }, 3000);
+        return;
+      }
+      armedUntil = 0;
+      clearTimeout(resetTimer);
+      btn.textContent = 'Exit to lobby';
+      btn.classList.remove('armed');
+      send({ t: 'lobby' });
+    });
+  }
 
   window.addEventListener('keydown', (e) => {
     if (state.phase !== 'draw' || !state.editor) return;
