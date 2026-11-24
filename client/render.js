@@ -322,6 +322,59 @@ export class Renderer {
           this.effects.push({ k: 'dot', x: ev.x, y: ev.y, vx: Math.cos(a) * 30, vy: Math.sin(a) * 30, t0: now, life: 0.35, c: '#ffffff' });
         }
         break;
+      case 'block':
+        for (let i = 0; i < 3; i++) {
+          const a = Math.random() * Math.PI * 2;
+          this.effects.push({ k: 'dot', x: ev.x, y: ev.y, vx: Math.cos(a) * 45, vy: Math.sin(a) * 45, t0: now, life: 0.25, c: '#ffd166' });
+        }
+        break;
+      case 'rise':
+        this.splat(ev.x, ev.y, '#6f8a58', 6, 0.3);
+        this.effects.push({ k: 'ring', x: ev.x, y: ev.y, r0: 4, r1: 18, t0: now, life: 0.6, c: '#7fb24a', w: 2.5 });
+        for (let i = 0; i < 5; i++) {
+          const a = Math.random() * Math.PI * 2;
+          this.effects.push({ k: 'puff', x: ev.x, y: ev.y, vx: Math.cos(a) * 14, vy: Math.sin(a) * 14 - 10, t0: now, life: 0.8, r: 3, c: '120,150,90' });
+        }
+        break;
+      case 'split':
+        this.effects.push({ k: 'ring', x: ev.x, y: ev.y, r0: ev.r * 0.5, r1: ev.r * 1.8, t0: now, life: 0.35, c: TEAM[ev.s].main, w: 2 });
+        this.splat(ev.x, ev.y, TEAM[ev.s].light, ev.r * 0.6, 0.35);
+        break;
+      case 'splat':
+        this.effects.push({ k: 'ring', x: ev.x, y: ev.y, r0: ev.r * 0.8, r1: ev.r * 2.2, t0: now, life: 0.3, c: TEAM[ev.s].light, w: 2 });
+        if (Math.random() < 0.3) this.splat(ev.x, ev.y, TEAM[ev.s].light, ev.r * 0.5, 0.18);
+        break;
+      case 'dash':
+        this.effects.push({ k: 'streak', x: ev.x, y: ev.y, x1: ev.x1, y1: ev.y1, t0: now, life: 0.3 });
+        break;
+      case 'smoke':
+        for (let i = 0; i < 14; i++) {
+          const a = Math.random() * Math.PI * 2;
+          const d = Math.random() * ev.r * 0.6;
+          this.effects.push({
+            k: 'cloud', x: ev.x + Math.cos(a) * d, y: ev.y + Math.sin(a) * d,
+            vx: Math.cos(a) * 6, vy: Math.sin(a) * 6 - 4, t0: now, life: ev.d * (0.85 + Math.random() * 0.3), r: ev.r * (0.35 + Math.random() * 0.25),
+          });
+        }
+        break;
+      case 'zap':
+        this.effects.push({ k: 'bolt', p: ev.p, t0: now, life: 0.28, seed: Math.random() * 100 });
+        for (let i = 2; i < ev.p.length; i += 2) this.effects.push({ k: 'ring', x: ev.p[i], y: ev.p[i + 1], r0: 2, r1: 10, t0: now, life: 0.25, c: '#bde0fe', w: 2 });
+        this.shake = Math.min(6, this.shake + 0.8);
+        break;
+      case 'pond':
+        for (const i of ev.t) {
+          const x = ((i % COLS) + 0.5) * TILE;
+          const y = (Math.floor(i / COLS) + 0.5) * TILE;
+          this.effects.push({ k: 'spark', x, y, t0: now + Math.random() * 0.15, life: 0.35, seed: Math.random() * 10 });
+        }
+        break;
+      case 'cast':
+        this.effects.push({ k: 'ring', x: ev.x, y: ev.y, r0: 14, r1: 4, t0: now, life: 0.45, c: '#8ecae6', w: 1.5 });
+        break;
+      case 'shot':
+        this.effects.push({ k: 'flash', x: ev.x, y: ev.y, r: 7, t0: now, life: 0.08 });
+        break;
       case 'fled':
         for (let i = 0; i < 4; i++) {
           const a = Math.random() * Math.PI * 2;
@@ -457,6 +510,44 @@ export class Renderer {
       }
     }
 
+    // Firebrands' flame jets, Marksmen's aim lines, Stormcallers' glow, ghoul bites.
+    const now = t;
+    for (const u of units) {
+      if (!u.spray && !u.aim && !u.cast && !u.infected) continue;
+      const r = UNITS[u.type].radius;
+      const c = Math.cos(u.heading);
+      const s = Math.sin(u.heading);
+      if (u.spray) {
+        for (let i = 0; i < 2; i++) {
+          const a = u.heading + (Math.random() - 0.5) * 0.8;
+          const v = 170 + Math.random() * 70;
+          this.effects.push({ k: 'jet', x: u.x + c * r * 1.7, y: u.y + s * r * 1.7, vx: Math.cos(a) * v, vy: Math.sin(a) * v, t0: now, life: 0.28 + Math.random() * 0.08 });
+        }
+      }
+      if (u.aim) {
+        const g = ctx.createLinearGradient(u.x, u.y, u.x + c * 220, u.y + s * 220);
+        g.addColorStop(0, 'rgba(226,85,63,0.7)');
+        g.addColorStop(1, 'rgba(226,85,63,0)');
+        ctx.strokeStyle = g;
+        ctx.lineWidth = 0.8;
+        ctx.beginPath(); ctx.moveTo(u.x + c * r * 2.8, u.y + s * r * 2.8); ctx.lineTo(u.x + c * 220, u.y + s * 220); ctx.stroke();
+      }
+      if (u.cast) {
+        ctx.globalAlpha = 0.5 + 0.3 * Math.sin(now * 30);
+        ctx.strokeStyle = '#8ecae6';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(u.x, u.y, r * 1.5, 0, Math.PI * 2); ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+      if (u.infected) {
+        ctx.globalAlpha = 0.45 + 0.25 * Math.sin(now * 5 + u.x);
+        ctx.strokeStyle = '#7fb24a';
+        ctx.lineWidth = 1.6;
+        ctx.beginPath(); ctx.arc(u.x, u.y - (u.z || 0), r * 1.15, 0, Math.PI * 2); ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+    }
+
     // Health bars for big units that are hurt.
     ctx.setTransform(k, 0, 0, k, sx * k, sy * k);
     for (const u of units) {
@@ -477,7 +568,17 @@ export class Renderer {
     const ctx = this.ctx;
     ctx.lineCap = 'round';
     for (const p of list) {
-      if (p.kind === 0) {
+      if (p.kind === 2) {
+        // Bullet: a bright streak.
+        const c = Math.cos(p.angle);
+        const s = Math.sin(p.angle);
+        ctx.strokeStyle = 'rgba(255,214,102,0.9)';
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.moveTo(p.x - c * 16, p.y - s * 16);
+        ctx.lineTo(p.x, p.y);
+        ctx.stroke();
+      } else if (p.kind === 0) {
         const c = Math.cos(p.angle);
         const s = Math.sin(p.angle);
         ctx.strokeStyle = INK;
@@ -558,6 +659,63 @@ export class Renderer {
         ctx.globalAlpha = 1;
         ctx.fillStyle = `rgba(${e.c},${0.55 * (1 - f)})`;
         ctx.beginPath(); ctx.arc(e.x, e.y, e.r * (1 + f), 0, Math.PI * 2); ctx.fill();
+      } else if (e.k === 'jet') {
+        e.x += e.vx * dt;
+        e.y += e.vy * dt;
+        e.vx *= 1 - 2.5 * dt;
+        e.vy *= 1 - 2.5 * dt;
+        ctx.globalAlpha = 0.8 * (1 - f);
+        ctx.fillStyle = FLAME[Math.min(FLAME.length - 1, Math.floor(f * FLAME.length))];
+        ctx.beginPath(); ctx.arc(e.x, e.y, 2 + f * 5, 0, Math.PI * 2); ctx.fill();
+      } else if (e.k === 'cloud') {
+        e.x += e.vx * dt;
+        e.y += e.vy * dt;
+        const fade = f > 0.75 ? (1 - f) / 0.25 : Math.min(1, f * 10);
+        ctx.globalAlpha = 0.82 * fade;
+        ctx.fillStyle = '#b9b6ae';
+        ctx.beginPath(); ctx.arc(e.x, e.y, e.r * (1 + f * 0.4), 0, Math.PI * 2); ctx.fill();
+      } else if (e.k === 'streak') {
+        ctx.globalAlpha = 0.6 * (1 - f);
+        ctx.strokeStyle = '#2e2b33';
+        ctx.lineWidth = 3 * (1 - f) + 0.5;
+        ctx.beginPath(); ctx.moveTo(e.x, e.y); ctx.lineTo(e.x1, e.y1); ctx.stroke();
+      } else if (e.k === 'bolt') {
+        // A jagged bolt along the chain, re-jittered every frame.
+        const p = e.p;
+        for (const [col, w] of [['rgba(142,202,230,0.6)', 4], ['#ffffff', 1.4]]) {
+          ctx.globalAlpha = 1 - f;
+          ctx.strokeStyle = col;
+          ctx.lineWidth = w;
+          ctx.beginPath();
+          ctx.moveTo(p[0], p[1]);
+          for (let i = 2; i < p.length; i += 2) {
+            const x0 = p[i - 2];
+            const y0 = p[i - 1];
+            const dx = p[i] - x0;
+            const dy = p[i + 1] - y0;
+            const len = Math.hypot(dx, dy) || 1;
+            const nx = -dy / len;
+            const ny = dx / len;
+            const segs = Math.max(2, Math.round(len / 12));
+            for (let k = 1; k < segs; k++) {
+              const j = (Math.random() - 0.5) * 8;
+              ctx.lineTo(x0 + dx * (k / segs) + nx * j, y0 + dy * (k / segs) + ny * j);
+            }
+            ctx.lineTo(p[i], p[i + 1]);
+          }
+          ctx.stroke();
+        }
+      } else if (e.k === 'spark') {
+        if (f < 0) continue;
+        ctx.globalAlpha = 1 - f;
+        ctx.strokeStyle = '#bde0fe';
+        ctx.lineWidth = 1.2;
+        const a = e.seed + now * 20;
+        ctx.beginPath();
+        ctx.moveTo(e.x - Math.cos(a) * 4, e.y - Math.sin(a) * 4);
+        ctx.lineTo(e.x + Math.sin(a * 1.7) * 2, e.y - Math.cos(a * 1.3) * 2);
+        ctx.lineTo(e.x + Math.cos(a) * 4, e.y + Math.sin(a) * 4);
+        ctx.stroke();
       } else if (e.k === 'plus') {
         ctx.globalAlpha = 1 - f;
         ctx.fillStyle = '#3fae5a';

@@ -310,6 +310,7 @@ let settingsTimer = null;
 function initLobby() {
   const ut = $('unitCosts');
   UNITS.forEach((u, i) => {
+    if (u.spawnOnly) return;
     const tr = document.createElement('tr');
     const icon = document.createElement('td');
     icon.className = 'icon';
@@ -525,7 +526,7 @@ function renderPalette() {
     box.appendChild(b);
   };
   if (state.tab === 'units') {
-    UNITS.forEach((u, i) => { if (!u.prop) unitButton(u, i); });
+    UNITS.forEach((u, i) => { if (!u.prop && !u.spawnOnly) unitButton(u, i); });
   } else {
     TERRAIN.forEach((t, id) => {
       if (!t) return;

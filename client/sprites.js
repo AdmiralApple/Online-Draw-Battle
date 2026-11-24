@@ -177,6 +177,108 @@ const DRAW = {
     line(ctx, r * 0.15, 0, r * 0.9, -r * 0.8, '#c9a26b', lw * 0.6); // fuse
     circle(ctx, r * 0.9, -r * 0.8, r * 0.14, '#ffb703');
   },
+  torch(ctx, r, c, lw) {
+    // Fuel tank on the back, nozzle out front.
+    ctx.fillStyle = '#c2462e';
+    ctx.strokeStyle = INK; ctx.lineWidth = lw * 0.7;
+    ctx.beginPath(); ctx.ellipse(-r * 0.95, 0, r * 0.42, r * 0.75, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    line(ctx, r * 0.2, r * 0.45, r * 1.7, r * 0.2, '#55524c', lw * 1.1);
+    circle(ctx, r * 1.75, r * 0.2, r * 0.2, '#ffb703', INK, lw * 0.5);
+    body(ctx, r, c, lw);
+    // Mask visor
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.55, -0.7, 0.7);
+    ctx.strokeStyle = '#33302c'; ctx.lineWidth = lw * 1.4; ctx.stroke();
+  },
+  legion(ctx, r, c, lw) {
+    line(ctx, r * 0.2, -r * 0.7, r * 1.6, -r * 0.6, '#c9ced6', lw * 0.9); // short sword
+    body(ctx, r, c, lw);
+    // Tall curved shield in front, in team colours with a boss.
+    ctx.beginPath();
+    ctx.arc(-r * 0.2, 0, r * 1.25, -0.85, 0.85);
+    ctx.arc(-r * 0.2, 0, r * 0.95, 0.85, -0.85, true);
+    ctx.closePath();
+    ctx.fillStyle = c.dark; ctx.fill();
+    ctx.strokeStyle = INK; ctx.lineWidth = lw * 0.8; ctx.stroke();
+    circle(ctx, r * 0.9, 0, r * 0.16, '#e9c46a', INK, lw * 0.4);
+    // Crest
+    ctx.beginPath();
+    ctx.ellipse(-r * 0.15, 0, r * 0.2, r * 0.7, 0, 0, Math.PI * 2);
+    ctx.fillStyle = '#c0392b'; ctx.fill();
+  },
+  sniper(ctx, r, c, lw) {
+    line(ctx, -r * 0.4, r * 0.3, r * 2.9, r * 0.3, '#3b3530', lw * 0.9); // long rifle
+    line(ctx, r * 0.5, r * 0.3, r * 1.1, r * 0.3, '#7a5230', lw * 1.6); // stock
+    ctx.fillStyle = '#55524c'; // scope
+    ctx.fillRect(r * 0.9, r * 0.0, r * 0.7, r * 0.22);
+    body(ctx, r, c, lw);
+    // Hood
+    ctx.beginPath();
+    ctx.arc(-r * 0.15, 0, r * 0.7, Math.PI * 0.55, Math.PI * 1.45);
+    ctx.strokeStyle = '#5d6b3f'; ctx.lineWidth = lw * 1.5; ctx.stroke();
+  },
+  shade(ctx, r, c, lw) {
+    line(ctx, r * 0.1, r * 0.6, r * 1.7, r * 1.05, '#d8dde3', lw * 0.7); // blade
+    circle(ctx, 0, 0, r, '#2e2b33', INK, lw);
+    // Team-coloured sash and a slit of eyes.
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.8, -2.4, -1.5);
+    ctx.strokeStyle = c.main; ctx.lineWidth = lw * 1.6; ctx.stroke();
+    line(ctx, r * 0.55, -r * 0.3, r * 0.55, r * 0.3, c.light, lw * 0.8);
+    line(ctx, -r * 0.9, r * 0.2, -r * 1.7, r * 0.6, c.main, lw * 0.8); // sash tails
+    line(ctx, -r * 0.9, -r * 0.1, -r * 1.6, -r * 0.2, c.main, lw * 0.8);
+  },
+  ghoul(ctx, r, c, lw) {
+    // Arms reaching forward.
+    line(ctx, r * 0.2, -r * 0.65, r * 1.55, -r * 0.5, '#8fa77a', lw * 1.2);
+    line(ctx, r * 0.2, r * 0.65, r * 1.55, r * 0.5, '#8fa77a', lw * 1.2);
+    circle(ctx, 0, 0, r, '#8fa77a', INK, lw);
+    // Tattered team rag and hollow eyes.
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.7, 1.9, 4.4);
+    ctx.strokeStyle = c.dark; ctx.lineWidth = lw * 1.6; ctx.stroke();
+    circle(ctx, r * 0.5, -r * 0.3, r * 0.15, '#2b2622');
+    circle(ctx, r * 0.5, r * 0.3, r * 0.15, '#2b2622');
+  },
+  ooze(ctx, r, c, lw) {
+    // A wobbly translucent blob in team colours with a highlight and two eyes.
+    ctx.beginPath();
+    const n = 10;
+    for (let i = 0; i <= n; i++) {
+      const a = (i / n) * Math.PI * 2;
+      const rr = r * (0.93 + 0.07 * Math.sin(i * 2.3));
+      const x = Math.cos(a) * rr;
+      const y = Math.sin(a) * rr;
+      if (i === 0) ctx.moveTo(x, y); else ctx.quadraticCurveTo(Math.cos(a - 0.3) * rr * 1.04, Math.sin(a - 0.3) * rr * 1.04, x, y);
+    }
+    ctx.closePath();
+    ctx.globalAlpha = 0.85;
+    ctx.fillStyle = c.main; ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = c.dark; ctx.lineWidth = lw; ctx.stroke();
+    ctx.beginPath();
+    ctx.ellipse(-r * 0.3, -r * 0.35, r * 0.3, r * 0.16, -0.5, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.fill();
+    circle(ctx, r * 0.45, -r * 0.25, r * 0.14, INK);
+    circle(ctx, r * 0.45, r * 0.25, r * 0.14, INK);
+  },
+  storm(ctx, r, c, lw) {
+    line(ctx, -r * 0.2, r * 0.85, r * 1.7, r * 0.85, '#7a5230', lw * 0.9); // staff
+    circle(ctx, r * 1.8, r * 0.85, r * 0.3, '#bde0fe', INK, lw * 0.5);
+    body(ctx, r, c, lw);
+    // Pointed hat seen from above: a star of brim and peak.
+    ctx.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const a = (i / 10) * Math.PI * 2;
+      const rr = i % 2 ? r * 0.3 : r * 0.68;
+      const x = -r * 0.05 + Math.cos(a) * rr;
+      const y = Math.sin(a) * rr;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.fillStyle = c.dark; ctx.fill();
+    ctx.strokeStyle = '#ffd166'; ctx.lineWidth = lw * 0.5; ctx.stroke();
+  },
 };
 
 const cache = new Map();
@@ -203,7 +305,7 @@ export function sprite(type, side, variant = 'normal') {
   ctx.scale(SPR, SPR);
   ctx.translate(extentX, extentY);
   const lw = Math.max(1, r * 0.16);
-  DRAW[def.key](ctx, r, TEAM[side], lw);
+  DRAW[def.art || def.key](ctx, r, TEAM[side], lw);
   if (variant === 'hurt' || variant === 'flee') {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalCompositeOperation = 'source-atop';
@@ -229,6 +331,6 @@ export function unitIcon(type, side, size = 44) {
   ctx.translate(size / 2 - r * 0.6 * scale, size / 2);
   ctx.scale(scale, scale);
   ctx.rotate(-0.35);
-  DRAW[def.key](ctx, r, TEAM[side], Math.max(1, r * 0.16));
+  DRAW[def.art || def.key](ctx, r, TEAM[side], Math.max(1, r * 0.16));
   return canvas;
 }

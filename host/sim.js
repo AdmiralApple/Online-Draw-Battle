@@ -17,7 +17,7 @@
 //     (mines, powder kegs and bombs share one blast model).
 
 import {
-  WORLD, COLS, ROWS, DT, UNITS, TERRAIN, T, BATTLE_TIME_LIMIT,
+  WORLD, COLS, ROWS, DT, UNITS, UNIT_INDEX, TERRAIN, T, BATTLE_TIME_LIMIT,
 } from '../shared/config.js';
 import { unitCost } from '../shared/draft.js';
 
@@ -60,7 +60,9 @@ const MORALE_RECOVER = 0.12;
 const MAX_FLEE = 9; // a routed unit still running after this long turns at bay
 const SKITTISH_RADIUS = 240;
 
-export const PROJ = { ARROW: 0, BOMB: 1 };
+export const PROJ = { ARROW: 0, BOMB: 1, BULLET: 2 };
+const SMOKE_SEE = 50; // units inside a smoke cloud can only be seen this close
+const POND_MAX = 900; // most water tiles one lightning strike electrifies
 const DEFAULT_BOMB_MIN_FRAC = 0.4;
 
 function mulberry32(seed) {
@@ -130,6 +132,7 @@ export class Battle {
     this.reason = '';
     this.events = [];
     this.projectiles = [];
+    this.smokes = []; // smoke clouds: { x, y, r, t }
     this.units = [];
     this.nextId = 1;
 
@@ -203,6 +206,12 @@ export class Battle {
       reactT: 0, meleeOn: 0, shotOn: 0, dodgeT: 0, dodx: 0, dody: 0,
       panicT: 0, px: x, py: y, burn: 0, wander: this.rng() * TAU, wanderT: 0, waterT: 0, waterX: -1, waterY: -1,
       armed: false, fuse: 0, group: null,
+      infected: -1, infBy: null, turnT: 0,
+      dashCd: d.dash ? this.rng() * d.dash.cooldown * 0.5 : 0, dashT: 0, dashVx: 0, dashVy: 0, dashHit: null,
+      smoked: false, escapeT: 0,
+      fuel: d.flame ? d.flame.fuel : 0, reloadT: 0, spray: false,
+      aimT: 0, aiming: false, aimTarget: null, castT: 0, castTarget: null,
+      restT: this.rng() * 0.4, hopping: false,
     };
     // Units drawn right next to a wall can overlap it. Pop them out to open ground,
     // otherwise every move they try is blocked and they never budge.
@@ -306,11 +315,18 @@ export class Battle {
         const dx = o.x - u.x;
         const dy = o.y - u.y;
         const d2 = dx * dx + dy * dy;
-        if (d2 < bestD) { bestD = d2; best = o; }
+        if (d2 < bestD && this.canSee(o, d2)) { bestD = d2; best = o; }
       });
       if (best) return best;
     }
     return null;
+  }
+
+  /** Smoke hides the units inside it from anyone further than SMOKE_SEE away. */
+  canSee(o, d2) {
+    if (!this.smokes.length || d2 <= SMOKE_SEE * SMOKE_SEE) return true;
+    for (const s of this.smokes) if ((o.x - s.x) ** 2 + (o.y - s.y) ** 2 < s.r * s.r) return false;
+    return true;
   }
 
   // --- Terrain helpers ---------------------------------------------------------
@@ -632,7 +648,7 @@ export class Battle {
   }
 
   // --- Damage, status and physics ---------------------------------------------------
-  damage(t, amount, from) {
+  damage(t, amount, from, noShield = false) {
     if (!t.alive) return;
     if (t.prop) {
       t.hp -= amount;
@@ -642,14 +658,27 @@ export class Battle {
       else t.alive = false;
       return;
     }
+    if (!noShield && from && t.def.shield) amount *= this.shieldFactor(t, from);
     t.hp -= amount;
     // Real hits flash the unit and rattle it a little. Damage over time (fire, brambles) doesn't.
     if (amount >= 2) {
       t.hurt = 0.15;
       if (t.def.morale.canBreak) t.morale -= t.def.morale.shock * (0.5 + Math.min(1.5, amount / 20));
     }
-    if (t.hp <= 0) this.kill(t, from);
-    else if (amount >= 5) this.emit({ k: 'hit', x: Math.round(t.x), y: Math.round(t.y), s: t.side });
+    if (t.hp <= 0) { this.kill(t, from); return; }
+    if (amount >= 5) this.emit({ k: 'hit', x: Math.round(t.x), y: Math.round(t.y), s: t.side });
+    if (t.def.split && amount >= 4) this.split(t);
+  }
+
+  /** How much of a hit from `from` gets past a shield: blocks from the front only. */
+  shieldFactor(t, from) {
+    const sh = t.def.shield;
+    if (!sh || t.stun > 0 || t.fleeing || t.z > 0) return 1;
+    let a = Math.atan2(from.y - t.y, from.x - t.x) - t.heading;
+    a = Math.atan2(Math.sin(a), Math.cos(a));
+    if (Math.abs(a) > sh.arc) return 1;
+    this.emit({ k: 'block', x: Math.round(t.x + Math.cos(t.heading) * t.r), y: Math.round(t.y + Math.sin(t.heading) * t.r) });
+    return 1 - sh.block;
   }
 
   kill(t, from) {
@@ -658,6 +687,48 @@ export class Battle {
     if (from && from.side !== t.side) this.stats.kills[from.side]++;
     if (t.group) t.group.dead++;
     this.addFear(t.side, t.x, t.y, 90, DEATH_FEAR);
+    if (t.infected >= 0) this.rise(t);
+  }
+
+  /** An infected unit rises again as a ghoul for the side that bit it. */
+  rise(t) {
+    const g = this.spawn(UNIT_INDEX.ghoul, t.infected, t.x, t.y);
+    g.heading = t.heading;
+    g.stun = 0.6;
+    g.burn = t.burn;
+    this.emit({ k: 'rise', x: Math.round(t.x), y: Math.round(t.y), s: t.infected });
+    // Watching a friend rise is terrifying.
+    this.addFear(t.side, t.x, t.y, 90, DEATH_FEAR);
+  }
+
+  /** An ooze hit hard enough splits into two smaller ones sharing what's left of its HP. */
+  split(t) {
+    const nt = UNIT_INDEX[t.def.split];
+    const hp = t.hp / 2;
+    t.alive = false;
+    const a = this.rng() * TAU;
+    for (const s of [-1, 1]) {
+      const cx = Math.cos(a) * s;
+      const cy = Math.sin(a) * s;
+      const c = this.spawn(nt, t.side, t.x + cx * t.r * 0.5, t.y + cy * t.r * 0.5);
+      c.hp = Math.min(c.maxHp, hp);
+      c.burn = t.burn;
+      c.target = t.target;
+      c.heading = t.heading;
+      c.kx = t.kx + cx * 90;
+      c.ky = t.ky + cy * 90;
+      c.restT = 0.25 + this.rng() * 0.3;
+    }
+    this.emit({ k: 'split', x: Math.round(t.x), y: Math.round(t.y), r: Math.round(t.r), s: t.side });
+  }
+
+  /** Bite: a chance to infect. Mounted units carry it until they die; others turn soon. */
+  infect(u, t, chance) {
+    if (!t.alive || t.prop || t.def.undead || t.def.noInfect || t.infected >= 0) return;
+    if (this.rng() >= chance) return;
+    t.infected = u.side;
+    t.infBy = u;
+    t.turnT = t.def.mounted ? Infinity : 2 + this.rng() * 1.5;
   }
 
   knock(t, dx, dy, impulse, stun) {
@@ -763,7 +834,7 @@ export class Battle {
       if (d > o.r && !this.lineOfSight(x, y, o.x, o.y)) return;
       const fall = Math.max(minFrac, 1 - d / (R + o.r));
       const dmg = b.damage * fall;
-      this.damage(o, dmg, source);
+      this.damage(o, dmg, source, true);
       if (!o.alive) return;
       const kd = d || 1;
       if (dmg >= o.maxHp * 0.35) this.throwUnit(o, dx / kd, dy / kd, b.knockback * fall, 220 + 260 * fall);
@@ -816,7 +887,8 @@ export class Battle {
       });
     } else {
       this.damage(t, dmg * this.bonus(u, t), u);
-      if (m.knockback && !m.chargeDamage) this.knock(t, dx, dy, m.knockback, 0.3);
+      if (m.knockback && !m.chargeDamage && t.alive) this.knock(t, dx, dy, m.knockback, 0.3);
+      if (m.infect) this.infect(u, t, m.infect);
     }
     u.attackAnim = 1;
   }
@@ -841,14 +913,14 @@ export class Battle {
     ty += Math.sin(a) * s;
     const len = Math.hypot(tx - u.x, ty - u.y) || 1;
     // Arrows keep flying a bit past the aim point so they can still hit something.
-    const travel = rg.lob ? len : len + 40;
+    const travel = rg.lob ? len : len + (rg.pierce ? 160 : 40);
     const dirx = (tx - u.x) / len;
     const diry = (ty - u.y) / len;
     const dur = Math.max(0.05, travel / rg.speed);
     this.nextProjId = ((this.nextProjId || 0) % 65535) + 1;
     this.projectiles.push({
       id: this.nextProjId,
-      kind: rg.lob ? PROJ.BOMB : PROJ.ARROW,
+      kind: rg.lob ? PROJ.BOMB : rg.projectile === 'bullet' ? PROJ.BULLET : PROJ.ARROW,
       side: u.side, owner: u,
       sx: u.x + dirx * u.r, sy: u.y + diry * u.r,
       ex: u.x + dirx * travel, ey: u.y + diry * travel,
@@ -857,10 +929,11 @@ export class Battle {
       arc: rg.lob ? 30 + len * 0.3 : 0,
       angle: Math.atan2(diry, dirx),
       damage: rg.damage, aoe: rg.aoe || 0, knockback: rg.knockback || 0,
-      supp: null,
+      supp: null, pierce: rg.pierce || 0, hits: null,
     });
     this.stats.shots[u.side]++;
     u.attackAnim = 1;
+    if (rg.pierce) this.emit({ k: 'shot', x: Math.round(u.x + dirx * u.r * 1.6), y: Math.round(u.y + diry * u.r * 1.6) });
     if (rg.lob) {
       this.emit({ k: 'lob', x: Math.round(u.x), y: Math.round(u.y) });
       this.warnDodge(u.x + dirx * travel, u.y + diry * travel, (rg.aoe || 0) + 12, dur, u.side);
@@ -904,25 +977,37 @@ export class Battle {
         keep.push(p);
         continue;
       }
-      // Arrow: blocked by walls, hits the first enemy (or enemy powder keg) it touches.
-      if (this.isSolidAt(p.x, p.y)) continue;
-      let hit = null;
-      this.forNear(p.x, p.y, MAX_RADIUS + 10, (o) => {
-        if (hit || o.side === p.side || !o.alive || o.def.mine || o.z > 12) return;
-        const dx = o.x - p.x;
-        const dy = o.y - p.y;
-        const d2 = dx * dx + dy * dy;
-        if (d2 <= (o.r + 2) * (o.r + 2)) { hit = o; return; }
-        // Near misses rattle the target's nerves.
-        if (!o.prop && d2 <= (o.r + 10) * (o.r + 10) && o.def.morale.canBreak) {
-          if (!p.supp) p.supp = [];
-          if (!p.supp.includes(o.id)) { p.supp.push(o.id); o.morale -= o.def.morale.supp; }
-        }
-      });
-      if (hit) {
-        this.damage(hit, p.damage * (0.85 + this.rng() * 0.3), p.owner);
-        continue;
+      // Arrows and bullets: blocked by walls, hit the first enemy (or enemy powder keg) they
+      // touch. Fast bullets are checked along their whole path this tick and can punch
+      // through several units, unless a shield stops them.
+      const bullet = p.kind === PROJ.BULLET;
+      const steps = bullet ? Math.max(1, Math.ceil(Math.hypot(p.x - px, p.y - py) / 5)) : 1;
+      let done = false;
+      for (let s = 1; s <= steps && !done; s++) {
+        const qx = bullet ? px + (p.x - px) * (s / steps) : p.x;
+        const qy = bullet ? py + (p.y - py) * (s / steps) : p.y;
+        if (this.isSolidAt(qx, qy)) { done = true; break; }
+        let hit = null;
+        this.forNear(qx, qy, MAX_RADIUS + 10, (o) => {
+          if (hit || o.side === p.side || !o.alive || o.def.mine || o.z > 12) return;
+          if (p.hits && p.hits.includes(o.id)) return;
+          const dx = o.x - qx;
+          const dy = o.y - qy;
+          const d2 = dx * dx + dy * dy;
+          if (d2 <= (o.r + 2) * (o.r + 2)) { hit = o; return; }
+          // Near misses rattle the target's nerves.
+          if (!o.prop && d2 <= (o.r + 10) * (o.r + 10) && o.def.morale.canBreak) {
+            if (!p.supp) p.supp = [];
+            if (!p.supp.includes(o.id)) { p.supp.push(o.id); o.morale -= o.def.morale.supp; }
+          }
+        });
+        if (!hit) continue;
+        const sf = hit.prop ? 1 : this.shieldFactor(hit, p.owner);
+        this.damage(hit, p.damage * (0.85 + this.rng() * 0.3) * sf, p.owner, true);
+        if (!bullet || sf < 1 || --p.pierce <= 0) { done = true; break; }
+        (p.hits || (p.hits = [])).push(hit.id);
       }
+      if (done) continue;
       if (f < 1) keep.push(p);
     }
     this.projectiles = keep;
@@ -1004,14 +1089,14 @@ export class Battle {
     const swarm = d.targeting === 'swarm';
     const melee = d.role === 'melee';
     const ranged = d.role === 'ranged';
-    const R = near + 40 + (swarm ? 110 : 0);
+    const R = near + 40 + (swarm ? 110 : d.targeting === 'assassin' ? 160 : 0);
     const cand = [];
     const weight = [];
     let total = 0;
     this.forNear(u.x, u.y, R, (o) => {
       if (o.side === u.side || !o.alive || o.prop) return;
       const dist = Math.hypot(o.x - u.x, o.y - u.y);
-      if (dist > R) return;
+      if (dist > R || !this.canSee(o, dist * dist)) return;
       let s = 1 / ((dist + 15) * (dist + 15));
       // Spread out: an enemy already mobbed or under fire is less attractive.
       if (melee) {
@@ -1027,6 +1112,9 @@ export class Battle {
         if (o.def.role !== 'melee') s *= 4;
         if (o.fleeing) s *= 3;
       }
+      if (d.targeting === 'assassin') s *= o.def.role === 'melee' ? 0.5 : 6;
+      if (d.flame && o.def.flammability <= 0) s *= 0.05; // flames can't hurt it
+      if (d.melee?.infect && o.infected >= 0) s *= 0.3; // already bitten
       cand.push(o);
       weight.push(s);
       total += s;
@@ -1051,6 +1139,22 @@ export class Battle {
     const d = u.def;
     if (u.target && !u.target.alive) { u.target = null; u.retarget = 0; }
     const run = d.speed * 1.25;
+
+    // A badly hurt Shade with an enemy close vanishes in smoke and slips away.
+    const sm = d.smoke;
+    if (sm && !u.smoked && u.hp <= u.maxHp * sm.hp && u.threat && u.threat.alive
+      && Math.hypot(u.threat.x - u.x, u.threat.y - u.y) < 140) this.dropSmoke(u);
+    if (u.escapeT > 0) {
+      const t = u.threat;
+      let ex = Math.cos(u.heading);
+      let ey = Math.sin(u.heading);
+      if (t && t.alive) {
+        const dl = Math.hypot(u.x - t.x, u.y - t.y) || 1;
+        ex = (u.x - t.x) / dl;
+        ey = (u.y - t.y) / dl;
+      }
+      return [ex * d.speed * 1.3, ey * d.speed * 1.3];
+    }
 
     // Panicked horses bolt away from whatever frightened them.
     if (u.panicT > 0) {
@@ -1095,6 +1199,8 @@ export class Battle {
     }
     let v;
     if (d.role === 'healer') v = this.thinkHealer(u);
+    else if (d.hop) v = this.thinkHop(u);
+    else if (d.flame) v = this.thinkFlame(u);
     else if (d.role === 'ranged') v = this.thinkRanged(u);
     else v = this.thinkMelee(u);
     return this.avoidMines(u, v);
@@ -1164,6 +1270,14 @@ export class Battle {
     if (!t) return this.advance(u, d.speed);
     const dist = Math.hypot(t.x - u.x, t.y - u.y);
     const contact = u.r + t.r + d.melee.reach;
+    // Dash strike: cover the gap in a blink, slashing through whoever is in the way.
+    const ds = d.dash;
+    if (ds && u.dashCd <= 0 && u.los && u.reactT <= 0 && !u.inWater && t.z <= 20
+      && dist >= ds.min + u.r + t.r && dist <= ds.max && this.startDash(u, t, dist)) return [u.dashVx, u.dashVy];
+    // Legionaries rush in when the enemy is close; ghouls lunge.
+    let speed = d.speed;
+    if (d.rush && dist < d.rush.dist) speed *= d.rush.mul;
+    else if (d.sprint && dist < d.sprint.dist) speed = d.sprint.speed;
     if (dist <= contact && u.los) {
       this.face(u, t.x, t.y);
       if (u.cd <= 0 && u.reactT <= 0 && t.z <= 20) {
@@ -1174,7 +1288,222 @@ export class Battle {
       if (d.melee.chargeDamage) return this.advance(u, d.speed * 0.6);
       return [0, 0];
     }
-    return this.advance(u, d.speed);
+    return this.advance(u, speed);
+  }
+
+  startDash(u, t, dist) {
+    const ds = u.def.dash;
+    const dx = (t.x - u.x) / dist;
+    const dy = (t.y - u.y) / dist;
+    const len = dist + ds.past;
+    if (!this.lineOfSight(u.x, u.y, u.x + dx * len, u.y + dy * len)) return false;
+    u.dashT = ds.time;
+    u.dashVx = (dx * len) / ds.time;
+    u.dashVy = (dy * len) / ds.time;
+    u.dashCd = ds.cooldown * (0.85 + this.rng() * 0.3);
+    u.dashHit = [];
+    u.attackAnim = 1;
+    this.emit({ k: 'dash', x: Math.round(u.x), y: Math.round(u.y), x1: Math.round(u.x + dx * len), y1: Math.round(u.y + dy * len) });
+    return true;
+  }
+
+  dashSlash(u) {
+    const ds = u.def.dash;
+    if (u.dashHit.length >= ds.hits) return;
+    const sp = Math.hypot(u.dashVx, u.dashVy) || 1;
+    this.forNear(u.x, u.y, u.r + MAX_RADIUS + 4, (o) => {
+      if (u.dashHit.length >= ds.hits || !o.alive || o.prop || o.side === u.side || o.z > 20) return;
+      if (u.dashHit.includes(o.id) || Math.hypot(o.x - u.x, o.y - u.y) > u.r + o.r + 4) return;
+      u.dashHit.push(o.id);
+      this.damage(o, ds.damage * (0.85 + this.rng() * 0.3), u);
+      if (o.alive) this.knock(o, u.dashVy / sp, -u.dashVx / sp, 70, 0.25);
+    });
+  }
+
+  dropSmoke(u) {
+    const sm = u.def.smoke;
+    u.smoked = true;
+    this.smokes.push({ x: u.x, y: u.y, r: sm.radius, t: sm.time });
+    this.emit({ k: 'smoke', x: Math.round(u.x), y: Math.round(u.y), r: sm.radius, d: sm.time });
+    u.target = null;
+    u.retarget = sm.escape;
+    u.escapeT = sm.escape;
+  }
+
+  /** Oozes only move by hopping. Each landing shoves enemies away and slams one of them. */
+  thinkHop(u) {
+    const h = u.def.hop;
+    if (u.z > 0) return [u.vx, u.vy];
+    u.restT -= DT;
+    if (u.restT > 0) return [0, 0];
+    const t = u.target;
+    let dx = 0;
+    let dy = 0;
+    let dist = h.dist;
+    if (t && u.los) {
+      const td = Math.hypot(t.x - u.x, t.y - u.y) || 1;
+      dx = (t.x - u.x) / td;
+      dy = (t.y - u.y) / td;
+      dist = Math.min(h.dist, Math.max(8, td - u.r - t.r + 2));
+    } else if (this.flowDir(u)) {
+      dx = u.fdx;
+      dy = u.fdy;
+    } else return [0, 0];
+    const sp = dist / h.air;
+    u.vx = dx * sp;
+    u.vy = dy * sp;
+    u.z = 0.5;
+    u.vz = (GRAVITY * h.air) / 2;
+    u.hopping = true;
+    u.restT = h.rest * (0.8 + this.rng() * 0.6);
+    return [u.vx, u.vy];
+  }
+
+  hopLand(u) {
+    const h = u.def.hop;
+    this.emit({ k: 'splat', x: Math.round(u.x), y: Math.round(u.y), r: Math.round(u.r), s: u.side });
+    const R = u.r * h.pushR;
+    let best = null;
+    let bestGap = 6;
+    this.forNear(u.x, u.y, R + MAX_RADIUS, (o) => {
+      if (!o.alive || o.prop || o.side === u.side || o.z > 0) return;
+      const dx = o.x - u.x;
+      const dy = o.y - u.y;
+      const d = Math.hypot(dx, dy) || 1;
+      if (d > R + o.r) return;
+      const f = 1 - Math.min(1, d / (R + o.r)) * 0.7;
+      this.knock(o, dx / d, dy / d, h.push * f, 0.3 * f);
+      const gap = d - u.r - o.r;
+      if (gap < bestGap) { bestGap = gap; best = o; }
+    });
+    if (best) {
+      this.damage(best, h.slam * (0.85 + this.rng() * 0.3), u);
+      u.attackAnim = 1;
+    }
+  }
+
+  /** Firebrands close in and hose the target with flame until the tank runs dry. */
+  thinkFlame(u) {
+    const d = u.def;
+    const fl = d.flame;
+    const t = u.target;
+    if (!t) return this.advance(u, d.speed);
+    const dist = Math.hypot(t.x - u.x, t.y - u.y);
+    if (dist > (fl.range + t.r) * 0.85 || !u.los) return this.advance(u, d.speed);
+    this.face(u, t.x, t.y);
+    if (!u.inWater && u.reloadT <= 0 && u.reactT <= 0) this.sprayFlame(u, Math.atan2(t.y - u.y, t.x - u.x));
+    return [0, 0];
+  }
+
+  sprayFlame(u, a0) {
+    const fl = u.def.flame;
+    u.spray = true;
+    u.fuel -= DT;
+    if (u.fuel <= 0) { u.fuel = 0; u.reloadT = fl.reload; }
+    this.forNear(u.x, u.y, fl.range + MAX_RADIUS, (o) => {
+      if (!o.alive || o === u || o.z > 20 || o.def.flammability <= 0) return;
+      if (o.prop ? !o.def.blast : o.side === u.side) return; // enemies, and any powder keg
+      const ox = o.x - u.x;
+      const oy = o.y - u.y;
+      const dd = Math.hypot(ox, oy) || 1;
+      if (dd > fl.range + o.r) return;
+      let da = Math.atan2(oy, ox) - a0;
+      da = Math.atan2(Math.sin(da), Math.cos(da));
+      if (Math.abs(da) > fl.arc + Math.atan2(o.r, dd)) return;
+      if (!this.lineOfSight(u.x, u.y, o.x, o.y)) return;
+      if (!o.prop) this.damage(o, fl.dps * DT, u);
+      this.ignite(o, fl.ignite * DT);
+    });
+    // The flames also lick the ground: brambles catch, ice melts, water steams.
+    for (let k = 0; k < 2; k++) {
+      const r = fl.range * Math.sqrt(this.rng());
+      const a = a0 + (this.rng() * 2 - 1) * fl.arc;
+      const x = u.x + Math.cos(a) * r;
+      const y = u.y + Math.sin(a) * r;
+      const i = this.tileIndex(x, y);
+      if (i < 0 || this.solid[i]) continue;
+      const g = this.grid[i];
+      if (g === T.ICE) this.damageIce(i, 0.08);
+      else if (TERRAIN[g]?.flammable && this.rng() < 0.12 && this.lineOfSight(u.x, u.y, x, y)) this.igniteTile(i);
+      else if (g === T.WATER && this.rng() < 0.04) this.emit({ k: 'steam', x: Math.round(x), y: Math.round(y) });
+    }
+  }
+
+  /** Chain lightning: hits the target, then jumps to the nearest unit in reach, weaker each time. */
+  zap(u, t) {
+    const z = u.def.ranged.zap;
+    let dmg = u.def.ranged.damage;
+    const struck = new Set([t.id]);
+    const pts = [Math.round(u.x), Math.round(u.y), Math.round(t.x), Math.round(t.y)];
+    let wet = t.inWater ? t : null;
+    let cur = t;
+    this.zapHit(u, t, dmg);
+    for (let j = 0; j < z.jumps; j++) {
+      dmg *= z.falloff;
+      let best = null;
+      let bd = Infinity;
+      this.forNear(cur.x, cur.y, z.jumpRange * 2 + MAX_RADIUS, (o) => {
+        if (!o.alive || o.prop || o === u || struck.has(o.id)) return;
+        // Metal-clad troops draw the lightning further, whichever side they're on.
+        const c = o.def.conduct || 1;
+        if (c < 1.5 && o.side === u.side) return;
+        const dd = Math.hypot(o.x - cur.x, o.y - cur.y) - o.r;
+        if (dd > z.jumpRange * c || dd >= bd) return;
+        bd = dd;
+        best = o;
+      });
+      if (!best) break;
+      struck.add(best.id);
+      pts.push(Math.round(best.x), Math.round(best.y));
+      if (!wet && best.inWater) wet = best;
+      cur = best;
+      this.zapHit(u, best, dmg);
+    }
+    this.emit({ k: 'zap', p: pts });
+    this.stats.shots[u.side]++;
+    if (wet) this.shockPond(u, wet);
+  }
+
+  zapHit(u, o, dmg) {
+    const z = u.def.ranged.zap;
+    this.damage(o, dmg * (0.85 + this.rng() * 0.3), u, true);
+    if (!o.alive) return;
+    this.knock(o, 0, 0, 0, z.stun);
+    this.ignite(o, z.ignite);
+  }
+
+  /** Lightning striking water electrifies every unit standing in the same pond. */
+  shockPond(u, wet) {
+    const z = u.def.ranged.zap;
+    const start = this.tileIndex(wet.x, wet.y);
+    if (start < 0 || this.grid[start] !== T.WATER) return;
+    const mark = this.pondMark || (this.pondMark = new Uint8Array(COLS * ROWS));
+    mark.fill(0);
+    mark[start] = 1;
+    const tiles = [start];
+    for (let n = 0; n < tiles.length && tiles.length < POND_MAX; n++) {
+      const i = tiles[n];
+      const c = i % COLS;
+      const r = (i / COLS) | 0;
+      for (const [dc, dr] of NEIGH4) {
+        const nc = c + dc;
+        const nr = r + dr;
+        if (nc < 0 || nr < 0 || nc >= COLS || nr >= ROWS) continue;
+        const j = nr * COLS + nc;
+        if (!mark[j] && this.grid[j] === T.WATER) { mark[j] = 1; tiles.push(j); }
+      }
+    }
+    for (const o of this.units) {
+      if (!o.alive || o.prop || !o.inWater || o.z > 0) continue;
+      const i = this.tileIndex(o.x, o.y);
+      if (i < 0 || !mark[i]) continue;
+      const dd = Math.hypot(o.x - wet.x, o.y - wet.y);
+      this.damage(o, z.pond * Math.max(0.35, 1 - dd / 300), u, true);
+      if (o.alive) this.knock(o, 0, 0, 0, z.pondStun);
+    }
+    const sample = [];
+    for (let k = 0; k < Math.min(30, tiles.length); k++) sample.push(tiles[(this.rng() * tiles.length) | 0]);
+    this.emit({ k: 'pond', t: sample });
   }
 
   thinkRanged(u) {
@@ -1195,13 +1524,32 @@ export class Battle {
       vx = -dx / dist * d.speed * 0.8;
       vy = -dy / dist * d.speed * 0.8;
     } else if (!canShoot) {
-      [vx, vy] = this.advance(u, d.speed);
+      // Marksmen hold their ground against a target they can see but not yet reach.
+      if (!(rg.hold && u.los && !u.inWater && !tooClose)) [vx, vy] = this.advance(u, d.speed);
     }
+    if (!canShoot) u.aiming = false;
     if (canShoot) {
       this.face(u, t.x, t.y);
       if (u.cd <= 0 && u.reactT <= 0) {
-        this.fire(u, t);
-        u.cd = rg.cooldown * (0.85 + this.rng() * 0.3);
+        if (rg.aim) {
+          // Steady the aim first; moving spoils it.
+          if (!u.aiming || u.aimTarget !== t) { u.aiming = true; u.aimT = rg.aim; u.aimTarget = t; }
+          else if (Math.hypot(u.vx, u.vy) < 12) u.aimT -= DT;
+          if (u.aimT <= 0) {
+            u.aiming = false;
+            this.fire(u, t);
+            u.cd = rg.cooldown * (0.85 + this.rng() * 0.3);
+          }
+        } else if (rg.zap) {
+          if (u.castT <= 0) {
+            u.castT = rg.zap.cast;
+            u.castTarget = t;
+            this.emit({ k: 'cast', x: Math.round(u.x), y: Math.round(u.y) });
+          }
+        } else {
+          this.fire(u, t);
+          u.cd = rg.cooldown * (0.85 + this.rng() * 0.3);
+        }
       }
     }
     return [vx, vy];
@@ -1212,18 +1560,18 @@ export class Battle {
     const h = d.heal;
     u.retargetHeal = (u.retargetHeal || 0) - DT;
     const p0 = u.patient;
-    if (u.retargetHeal <= 0 || (p0 && (!p0.alive || (p0.hp >= p0.maxHp && p0.burn <= 0 && !p0.fleeing)))) {
+    if (u.retargetHeal <= 0 || (p0 && (!p0.alive || (p0.hp >= p0.maxHp && p0.burn <= 0 && !p0.fleeing && p0.infected < 0)))) {
       u.retargetHeal = 0.4 + this.rng() * 0.2;
       let best = null;
       let bestScore = Infinity;
       this.forNear(u.x, u.y, h.search, (o) => {
         if (o === u || o.side !== u.side || !o.alive || o.prop) return;
         // Burning allies come first, then the badly hurt, then anyone shaken.
-        const needs = o.burn > 0 || o.hp < o.maxHp * 0.95 || (o.fleeing && o.def.morale.canBreak);
+        const needs = o.burn > 0 || o.infected >= 0 || o.hp < o.maxHp * 0.95 || (o.fleeing && o.def.morale.canBreak);
         if (!needs) return;
         const dd = Math.hypot(o.x - u.x, o.y - u.y);
         if (dd > h.search) return;
-        const score = (o.hp / o.maxHp) * 200 + dd - (o.burn > 0 ? 300 : 0);
+        const score = (o.hp / o.maxHp) * 200 + dd - (o.burn > 0 ? 300 : 0) - (o.infected >= 0 ? 250 : 0);
         if (score < bestScore) { bestScore = score; best = o; }
       });
       u.patient = best;
@@ -1257,6 +1605,7 @@ export class Battle {
           const amount = Math.min(h.amount, p.maxHp - p.hp);
           p.hp += amount;
           this.extinguish(p, false);
+          p.infected = -1; // medics cure a ghoul bite
           if (p.def.morale.canBreak) p.morale = Math.min(1, p.morale + h.morale);
           this.stats.healed[u.side] += amount;
           u.healCd = h.cooldown;
@@ -1302,6 +1651,10 @@ export class Battle {
     }
 
     this.stepTiles();
+    if (this.smokes.length) {
+      for (const s of this.smokes) s.t -= DT;
+      this.smokes = this.smokes.filter((s) => s.t > 0);
+    }
 
     for (const u of this.units) {
       if (!u.alive) continue;
@@ -1325,8 +1678,26 @@ export class Battle {
     if (u.dodgeT > 0) u.dodgeT -= DT;
     if (u.panicT > 0) u.panicT -= DT;
     if (u.steadyT > 0) u.steadyT -= DT;
+    if (u.dashCd > 0) u.dashCd -= DT;
+    if (u.escapeT > 0) u.escapeT -= DT;
+    if (u.reloadT > 0) { u.reloadT -= DT; if (u.reloadT <= 0) u.fuel = d.flame.fuel; }
+    u.spray = false;
     if (u.attackAnim > 0) u.attackAnim = Math.max(0, u.attackAnim - DT / 0.3);
     u.faceAngle = null;
+    // A Stormcaller's spell goes off at the end of its cast, unless it was knocked out of it.
+    if (u.castT > 0) {
+      u.castT -= DT;
+      u.attackAnim = Math.max(u.attackAnim, 0.6);
+      if (u.stun > 0) { u.castT = 0; u.castTarget = null; }
+      else if (u.castT <= 0) {
+        const ct = u.castTarget;
+        u.castTarget = null;
+        if (ct && ct.alive && Math.hypot(ct.x - u.x, ct.y - u.y) <= d.ranged.range * 1.2) {
+          this.zap(u, ct);
+          u.cd = d.ranged.cooldown * (0.85 + this.rng() * 0.3);
+        }
+      }
+    }
 
     // Airborne: thrown units fly, then land hard.
     const air = u.z > 0;
@@ -1337,8 +1708,13 @@ export class Battle {
         const impact = Math.abs(u.vz);
         u.z = 0;
         u.vz = 0;
-        this.emit({ k: 'land', x: Math.round(u.x), y: Math.round(u.y), r: Math.round(u.r) });
-        if (impact > 150) this.damage(u, (impact - 150) * 0.03, null);
+        if (u.hopping) {
+          u.hopping = false;
+          this.hopLand(u);
+        } else {
+          this.emit({ k: 'land', x: Math.round(u.x), y: Math.round(u.y), r: Math.round(u.r) });
+          if (impact > 150) this.damage(u, (impact - 150) * 0.03, null);
+        }
         if (!u.alive) return;
       }
     }
@@ -1352,6 +1728,7 @@ export class Battle {
     if (!air) {
       u.inWater = tid === T.WATER;
       if (terr && !terr.solid) speedMul = terr.speed;
+      if (u.inWater && d.wade) speedMul = Math.max(speedMul, d.wade);
       if (terr && terr.dps) this.damage(u, terr.dps * DT, null);
       if (!u.alive) return;
       if (u.inWater) this.extinguish(u, true);
@@ -1378,6 +1755,12 @@ export class Battle {
       }
     }
 
+    // Bitten: the infection takes hold and the unit rises as a ghoul.
+    if (u.infected >= 0) {
+      u.turnT -= DT;
+      if (u.turnT <= 0) { this.kill(u, u.infBy); return; }
+    }
+
     // Morale, about every 0.2 s.
     u.moraleT -= DT;
     if (u.moraleT <= 0) {
@@ -1395,12 +1778,20 @@ export class Battle {
     u.siege = false;
     u.flowing = false;
     u.chasing = false;
-    if (u.stun > 0) {
+    let direct = false;
+    if (u.dashT > 0) {
+      // Mid-dash: straight line at full speed, slashing whoever is in the way.
+      u.dashT -= DT;
+      dvx = u.dashVx;
+      dvy = u.dashVy;
+      direct = true;
+      this.dashSlash(u);
+    } else if (u.stun > 0) {
       u.stun -= DT;
     } else {
       [dvx, dvy] = this.think(u);
     }
-    const sm = speedMul * u.spd;
+    const sm = direct ? 1 : speedMul * u.spd;
     dvx *= sm;
     dvy *= sm;
 
@@ -1409,7 +1800,7 @@ export class Battle {
     const ay = dvy - u.vy;
     const al = Math.hypot(ax, ay);
     const maxA = air ? 0 : d.accel * DT * grip;
-    if (al > maxA) {
+    if (al > maxA && !direct) {
       if (maxA > 0) {
         u.vx += ax / al * maxA;
         u.vy += ay / al * maxA;
@@ -1470,8 +1861,8 @@ export class Battle {
 
   siegeHit(u, i) {
     const d = u.def;
-    const dmg = d.melee ? d.melee.damage : d.ranged.damage * 0.5;
-    const cd = d.melee ? d.melee.cooldown : d.ranged.cooldown * 0.6;
+    const dmg = d.melee ? d.melee.damage : d.ranged ? d.ranged.damage * 0.5 : 8;
+    const cd = d.melee ? d.melee.cooldown : d.ranged ? d.ranged.cooldown * 0.6 : 1;
     this.damageWall(i, dmg * (0.85 + this.rng() * 0.3));
     u.cd = cd * (0.9 + this.rng() * 0.2);
     u.attackAnim = 1;

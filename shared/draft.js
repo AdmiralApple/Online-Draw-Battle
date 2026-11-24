@@ -2,7 +2,7 @@
 // Wire format: { units: [[typeIndex, x, y], ...], terrain: "<base64 RLE of COLS*ROWS bytes>" }
 
 import {
-  COLS, ROWS, WORLD, UNITS, TERRAIN, inZone, tileInZone,
+  COLS, ROWS, WORLD, UNITS, UNIT_INDEX, TERRAIN, inZone, tileInZone,
 } from './config.js';
 
 export function emptyGrid() {
@@ -56,7 +56,10 @@ export function terrainCounts(grid) {
 }
 
 export function unitCost(typeIndex, settings) {
-  return settings.costs.units[UNITS[typeIndex].key] ?? UNITS[typeIndex].cost;
+  const d = UNITS[typeIndex];
+  // Units that only appear mid-battle (ooze halves) are worth a share of their parent.
+  if (d.spawnOnly) return d.parent ? unitCost(UNIT_INDEX[d.parent], settings) * d.share : 0;
+  return settings.costs.units[d.key] ?? d.cost;
 }
 
 export function terrainCost(terrainId, settings) {
@@ -92,7 +95,7 @@ export function validateDraft(raw, side, settings, layout = 2) {
     const type = u[0] | 0;
     const x = Number(u[1]);
     const y = Number(u[2]);
-    if (type < 0 || type >= UNITS.length || !Number.isFinite(x) || !Number.isFinite(y)) continue;
+    if (type < 0 || type >= UNITS.length || UNITS[type].spawnOnly || !Number.isFinite(x) || !Number.isFinite(y)) continue;
     if (!inZone(side, x, y, 0, layout)) continue;
     const t = TERRAIN[tileAt(grid, x, y)];
     if (t && t.solid) continue;

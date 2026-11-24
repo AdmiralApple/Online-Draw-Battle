@@ -60,6 +60,13 @@ Then open http://localhost:3000. This is only a static file server, needed becau
 | Medic | 4 | Heals wounded allies |
 | Bombardier | 6 | Lobs splash-damage bombs over walls |
 | Golem | 18 | Huge HP, area smash that throws units. Fireproof and fearless |
+| Firebrand | 5 | Short cone of flame that sets units and brambles alight. Fireproof. Can't hurt stone, can't fire from water |
+| Legionary | 4 | Shield blocks 65% of damage from the front, arrows and bullets included. Rushes in when the enemy is close |
+| Marksman | 6 | Very long range. Stands still to aim, and each shot passes through up to three units. Shields stop it |
+| Shade | 5 | Assassin that dashes through enemies and hunts ranged units. Drops a smoke cloud and slips away when badly hurt |
+| Ghoul | 3 | Slow, then lunges. Bitten units rise as ghouls on the biter's side unless a medic cures them first |
+| Ooze | 6 | Moves by hopping and slams whatever it lands next to. Splits in two when hit, and again, into four small blobs |
+| Stormcaller | 7 | Chain lightning that jumps between enemies. Arcs into metal-clad troops of either side and shocks a whole pond |
 
 ### Terrain (cost per 10×10 tile)
 
@@ -86,6 +93,8 @@ Props are placed like units but don't fight, nobody targets them, and they don't
 - **Reaction and targeting.** Every unit spawns slightly different (bravery, reaction time, speed). A newly spotted enemy takes a moment to react to. Units pick between nearby enemies by distance and avoid ones that are already mobbed or under fire. Hounds hunt archers, medics, bombardiers and runners. Pikemen, Lancers and Golems stick to their target.
 - **Fire.** Kegs and burning units set things alight, with a chance scaled by each unit's flammability. Burning hurts, terrifies and spreads by touch. Units run to nearby water to put it out, and medics put out burning allies. Golems are fireproof.
 - **Blasts and throws.** Bombs, mines and kegs share one explosion model: damage falls off with distance, walls shield units, and big hits throw units into the air. They land hard. Lancer charges and Golem smashes can throw too. Lancers bolt from blasts and fire.
+- **Shields, smoke and infection.** Legionaries take far less damage from the front unless stunned or routed. Units inside a smoke cloud can only be seen from close by. A ghoul bite turns most units within a few seconds; Lancers carry it until they die. Golems, oozes and ghouls can't be infected.
+- **Lightning.** Each jump of a Stormcaller's bolt loses a quarter of its power. Legionaries, Firebrands, Lancers and oozes conduct: the bolt reaches them from further away, even on its own side. If it strikes anyone standing in water, everyone in that pond takes a shock.
 - **Dodging.** Pikemen, archers, medics, bombardiers and lancers sidestep incoming bombs if they react in time, and step away from a beeping mine.
 
 ## How it's built
@@ -101,7 +110,7 @@ host/worker.js     Runs the hub in a Web Worker inside the host's tab
 shared/            Units, terrain, costs, draft encoding, binary snapshot format
 tools/serve.js     Local static server for development
 test/walls.js      Pathfinding tests around walls
-test/systems.js    Mines, kegs, fire, ice, morale and props
+test/systems.js    Mines, kegs, fire, ice, morale, props and unit abilities
 test/smoke.js      Headless end-to-end test
 ```
 

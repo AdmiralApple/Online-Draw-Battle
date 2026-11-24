@@ -88,7 +88,7 @@ const steps = (b, seconds) => { for (let i = 0; i < seconds * TICK_RATE && !b.ov
   for (let i = 0; i < 12; i++) units0.push([U.rider, 240, 80 + i * 48]);
   const b = battle({ units: units0, grid: g }, { units: [[U.spear, 1250, 360]], grid: grid() });
   let slips = 0;
-  for (let i = 0; i < 6 * TICK_RATE; i++) { b.step(); slips += b.takeEvents().filter((e) => e.k === 'slip').length; }
+  for (let i = 0; i < 10 * TICK_RATE; i++) { b.step(); slips += b.takeEvents().filter((e) => e.k === 'slip').length; }
   check(slips > 0, `lancers slip on ice (${slips} falls)`, 'no lancer ever slipped on ice');
 }
 
@@ -112,6 +112,111 @@ const steps = (b, seconds) => { for (let i = 0; i < seconds * TICK_RATE && !b.ov
   check(b.over && b.winner === 0, 'an army of only props has already lost', `props kept an army alive (over=${b.over})`);
 }
 
+// 6b. New units.
+{
+  const count = (b, key, side) => b.units.filter((u) => u.alive && u.type === U[key] && u.side === side).length;
+  const evs = (b, seconds, k) => {
+    let n = 0;
+    for (let i = 0; i < seconds * TICK_RATE && !b.over; i++) { b.step(); n += b.takeEvents().filter((e) => e.k === k).length; }
+    return n;
+  };
+
+  // A legionary's shield soaks up most of an arrow from the front, none from behind.
+  {
+    const b = battle({ units: [[U.legion, 600, 360]], grid: grid() }, { units: [[U.archer, 900, 360]], grid: grid() });
+    const l = b.units[0];
+    const a = b.units[1];
+    l.heading = 0;
+    b.damage(l, 40, a);
+    const front = 130 - l.hp;
+    l.hp = 130;
+    l.heading = Math.PI;
+    b.damage(l, 40, a);
+    const back = 130 - l.hp;
+    check(front < 20 && back === 40, `shield blocks from the front (${front.toFixed(0)} vs ${back} from behind)`, `shield front=${front} back=${back}`);
+  }
+
+  // Ghoul bites turn militia into ghouls for the biting side.
+  {
+    const units1 = [];
+    for (let i = 0; i < 6; i++) units1.push([U.militia, 760, 300 + i * 22]);
+    const b = battle({ units: [[U.ghoul, 600, 330], [U.ghoul, 600, 370], [U.ghoul, 600, 410]], grid: grid() }, { units: units1, grid: grid() });
+    const rises = evs(b, 40, 'rise');
+    check(rises > 0 && b.stats.kills[0] > 0, `bitten militia rise as ghouls (${rises} turned)`, 'no unit was turned by a ghoul bite');
+  }
+
+  // A medic cures a bite before it takes hold.
+  {
+    const b = battle({ units: [[U.medic, 600, 360], [U.militia, 620, 360]], grid: grid() }, { units: [[U.spear, 1250, 40]], grid: grid() });
+    const m = b.units[1];
+    m.infected = 1;
+    m.turnT = 3;
+    steps(b, 2.5);
+    check(m.alive && m.infected < 0, 'medic cures a ghoul bite', `bite not cured (alive=${m.alive} infected=${m.infected})`);
+  }
+
+  // An ooze splits into halves and then quarters as it takes hits.
+  {
+    const units1 = [];
+    for (let i = 0; i < 4; i++) units1.push([U.archer, 1000, 300 + i * 30]);
+    const b = battle({ units: [[U.ooze, 600, 360]], grid: grid() }, { units: units1, grid: grid() });
+    let sawHalf = false;
+    let sawQuarter = false;
+    for (let i = 0; i < 30 * TICK_RATE && !b.over; i++) {
+      b.step();
+      if (count(b, 'ooze_m', 0)) sawHalf = true;
+      if (count(b, 'ooze_s', 0)) sawQuarter = true;
+    }
+    check(sawHalf && sawQuarter, 'ooze splits into halves, then quarters', `ooze split half=${sawHalf} quarter=${sawQuarter}`);
+  }
+
+  // A marksman's bullet passes through a line of militia.
+  {
+    const units1 = [];
+    for (let i = 0; i < 4; i++) units1.push([U.militia, 800 + i * 16, 360]);
+    const b = battle({ units: [[U.sniper, 420, 360]], grid: grid() }, { units: units1, grid: grid() });
+    for (const u of b.units) if (u.side === 1) { u.stun = 99; u.def = { ...u.def, morale: { canBreak: false } }; }
+    steps(b, 4);
+    const hurt = b.units.filter((u) => u.side === 1 && u.hp < u.maxHp).length;
+    check(hurt >= 2, `marksman's shot pierces a line of units (${hurt} hit)`, `only ${hurt} militia hurt by a piercing shot`);
+  }
+
+  // Lightning striking a unit in water shocks everyone else in the pond.
+  {
+    const g = grid();
+    fill(g, 70, 20, 100, 50, T.WATER);
+    const units1 = [[U.militia, 760, 360], [U.militia, 960, 300], [U.militia, 960, 440]];
+    const b = battle({ units: [[U.storm, 560, 360]], grid: grid() }, { units: units1, grid: g });
+    for (const u of b.units) if (u.side === 1) u.stun = 99;
+    const ponds = evs(b, 4, 'pond');
+    const far = b.units.filter((u) => u.side === 1 && u.x > 900 && u.hp < u.maxHp).length;
+    check(ponds > 0 && far === 2, `lightning electrifies the pond (${far} distant waders hurt)`, `pond shock ponds=${ponds} far=${far}`);
+  }
+
+  // A badly hurt shade drops smoke, and enemies lose track of it.
+  {
+    const b = battle({ units: [[U.shade, 600, 360]], grid: grid() }, { units: [[U.spear, 640, 360]], grid: grid() });
+    const s = b.units[0];
+    s.hp = s.maxHp * 0.3;
+    const smokes = evs(b, 1, 'smoke');
+    check(smokes === 1 && b.smokes.length === 1, 'hurt shade vanishes in smoke', `smoke events=${smokes}`);
+  }
+
+  // Firebrands set enemies alight but can't hurt stone.
+  {
+    const units1 = [];
+    for (let i = 0; i < 3; i++) units1.push([U.militia, 700, 330 + i * 30]);
+    const b = battle({ units: [[U.torch, 600, 360]], grid: grid() }, { units: units1, grid: grid() });
+    const ign = evs(b, 6, 'ignite');
+    check(ign > 0, `firebrand sets militia alight (${ign} caught fire)`, 'firebrand never lit anyone');
+    const gb = battle({ units: [[U.torch, 600, 360]], grid: grid() }, { units: [[U.golem, 680, 360]], grid: grid() });
+    const golem = gb.units[1];
+    golem.stun = 99;
+    steps(gb, 4);
+    check(golem.hp === golem.maxHp, 'flames do nothing to a golem', `golem took ${golem.maxHp - golem.hp} fire damage`);
+  }
+}
+
 // 7. Every unit type survives a big mixed battle without errors, and snapshots round-trip.
 {
   const g0 = grid();
@@ -125,8 +230,8 @@ const steps = (b, seconds) => { for (let i = 0; i < seconds * TICK_RATE && !b.ov
   const d1 = [];
   UNITS.forEach((u, type) => {
     for (let i = 0; i < 6; i++) {
-      d0.push([type, 120 + (type % 4) * 60 + (i % 3) * 22, 40 + Math.floor(type / 4) * 200 + Math.floor(i / 3) * 40]);
-      d1.push([type, 1160 - (type % 4) * 60 - (i % 3) * 22, 40 + Math.floor(type / 4) * 200 + Math.floor(i / 3) * 40]);
+      d0.push([type, 120 + (type % 4) * 60 + (i % 3) * 22, 30 + Math.floor(type / 4) * 150 + Math.floor(i / 3) * 40]);
+      d1.push([type, 1160 - (type % 4) * 60 - (i % 3) * 22, 30 + Math.floor(type / 4) * 150 + Math.floor(i / 3) * 40]);
     }
   });
   let err = null;

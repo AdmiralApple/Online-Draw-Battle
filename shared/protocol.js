@@ -13,7 +13,7 @@
 
 export const MSG_SNAPSHOT = 1;
 // Bump whenever host and guest code stop being compatible; mismatched joins are refused.
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 const UNIT_BYTES = 12;
 const PROJ_BYTES = 9;
 const TAU = Math.PI * 2;
@@ -27,6 +27,10 @@ export const FLAG2_BURN = 0x01;
 export const FLAG2_FLEE = 0x02;
 export const FLAG2_ARMED = 0x04; // a mine or keg with a lit fuse
 export const FLAG2_PANIC = 0x08;
+export const FLAG2_SPRAY = 0x10; // a Firebrand spraying flame
+export const FLAG2_AIM = 0x20; // a Marksman taking aim
+export const FLAG2_INFECT = 0x40; // bitten by a ghoul, not yet turned
+export const FLAG2_CAST = 0x80; // a Stormcaller casting
 
 const angleToByte = (a) => Math.round((((a % TAU) + TAU) % TAU) / TAU * 255) & 255;
 const byteToAngle = (b) => (b / 255) * TAU;
@@ -57,6 +61,10 @@ export function encodeSnapshot(tick, units, projectiles) {
     if (u.fleeing) f2 |= FLAG2_FLEE;
     if (u.armed) f2 |= FLAG2_ARMED;
     if (u.panicT > 0) f2 |= FLAG2_PANIC;
+    if (u.spray) f2 |= FLAG2_SPRAY;
+    if (u.aiming) f2 |= FLAG2_AIM;
+    if (u.infected >= 0) f2 |= FLAG2_INFECT;
+    if (u.castT > 0) f2 |= FLAG2_CAST;
     v.setUint8(o + 10, f2);
     v.setUint8(o + 11, Math.max(0, Math.min(255, Math.round(u.z || 0))));
     o += UNIT_BYTES;
@@ -99,6 +107,10 @@ export function decodeSnapshot(arrayBuffer) {
       burn: (f2 & FLAG2_BURN) !== 0,
       flee: (f2 & FLAG2_FLEE) !== 0,
       armed: (f2 & FLAG2_ARMED) !== 0,
+      spray: (f2 & FLAG2_SPRAY) !== 0,
+      aim: (f2 & FLAG2_AIM) !== 0,
+      infected: (f2 & FLAG2_INFECT) !== 0,
+      cast: (f2 & FLAG2_CAST) !== 0,
       z: v.getUint8(o + 11),
     });
     o += UNIT_BYTES;
