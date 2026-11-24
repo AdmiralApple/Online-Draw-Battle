@@ -17,45 +17,225 @@ export const SIDE_NAMES = ['Teal', 'Coral', 'Plum'];
 export const MAX_PLAYERS = 3;
 
 // ---------------------------------------------------------------------------
-// Map layouts. The layout is picked by how many players are in the match:
-//   2 players: left / right halves.
-//   3 players: three regions meeting at MEET: one along the top, one bottom-left,
-//              one bottom-right. Every pair shares a border. MEET is placed so the
-//              three drawable areas come out equal (about 26% of the map each).
-// Each drawing zone is convex, written as half-planes [nx, ny, d] meaning
-// nx*x + ny*y >= d. Borders between zones are pulled back by NO_MANS_LAND / 2.
+// Maps. A 1v1 is always fought on left / right halves. A 1v1v1 is fought on one of
+// several maps, chosen in the lobby or at random each round. Every map gives each
+// player a convex drawing zone; the space between zones is no man's land, where
+// nobody may draw. Some maps also come with neutral terrain in no man's land.
+//
+// A map lists each zone as a convex polygon. Edges that don't run along the map edge
+// are pulled back by gap / 2, leaving `gap` px of no man's land between zones.
+// Zones are stored as half-planes [nx, ny, d] meaning nx*x + ny*y >= d.
 // ---------------------------------------------------------------------------
-const G = NO_MANS_LAND / 2;
-const HALF_W = WORLD.width / 2;
-const MEET_Y = 510;
-// Unit normal (a, b) of the border from MEET to the top-left corner; mirrored for top-right.
-const NL = Math.hypot(HALF_W, MEET_Y);
-const NA = MEET_Y / NL;
-const NB = HALF_W / NL;
-const RIGHT_D = NA * WORLD.width; // border to the top-right corner: NA*x + NB*y = RIGHT_D
-const LAYOUTS = {
-  2: [
-    [[-1, 0, -(HALF_W - G)]], // left half
-    [[1, 0, HALF_W + G]], // right half
-  ],
-  3: [
-    [[NA, -NB, G], [-NA, -NB, G - RIGHT_D]], // top
-    [[-NA, NB, G], [-1, 0, -(HALF_W - G)]], // bottom-left
-    [[NA, NB, RIGHT_D + G], [1, 0, HALF_W + G]], // bottom-right
-  ],
-};
+const W = WORLD.width;
+const H = WORLD.height;
+const HALF_W = W / 2;
 
-/** Number of player zones for a match with `players` players (2 or 3). */
-export function layoutFor(players) {
-  return players >= 3 ? 3 : 2;
+/** Three zones meeting at (HALF_W, meetY): one on top and two below, or flipped. */
+function yPolys(meetY, flipped) {
+  const m = [HALF_W, meetY];
+  if (!flipped) {
+    return [
+      [[0, 0], [W, 0], m], // top
+      [[0, 0], m, [HALF_W, H], [0, H]], // bottom-left
+      [m, [W, 0], [W, H], [HALF_W, H]], // bottom-right
+    ];
+  }
+  return [
+    [[0, 0], [HALF_W, 0], m, [0, H]], // top-left
+    [[HALF_W, 0], [W, 0], [W, H], m], // top-right
+    [[0, H], m, [W, H]], // bottom
+  ];
+}
+
+/** A regular octagon around (cx, cy). */
+function octagon(cx, cy, r) {
+  return Array.from({ length: 8 }, (_, i) => {
+    const a = (i / 8) * Math.PI * 2 + Math.PI / 8;
+    return [cx + Math.cos(a) * r, cy + Math.sin(a) * r];
+  });
+}
+
+
+function toHalfPlanes(poly, gap) {
+  const cx = poly.reduce((s, p) => s + p[0], 0) / poly.length;
+  const cy = poly.reduce((s, p) => s + p[1], 0) / poly.length;
+  const out = [];
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i];
+    const b = poly[(i + 1) % poly.length];
+    // Edges along the map edge need no half-plane: the world rect already bounds them.
+    const sameEdge = (a[0] === b[0] && (a[0] <= 0 || a[0] >= W)) || (a[1] === b[1] && (a[1] <= 0 || a[1] >= H));
+    if (sameEdge) continue;
+    let nx = -(b[1] - a[1]);
+    let ny = b[0] - a[0];
+    const l = Math.hypot(nx, ny);
+    nx /= l;
+    ny /= l;
+    if (nx * (cx - a[0]) + ny * (cy - a[1]) < 0) { nx = -nx; ny = -ny; }
+    out.push([nx, ny, nx * a[0] + ny * a[1] + gap / 2]);
+  }
+  return out;
+}
+
+// Outposts: three small octagons on an equilateral triangle.
+const OUT_C = [HALF_W, 430];
+const OUT_S = 480;
+const OUT_P = [
+  [OUT_C[0], OUT_C[1] - OUT_S / Math.sqrt(3)],
+  [OUT_C[0] - OUT_S / 2, OUT_C[1] + OUT_S / (2 * Math.sqrt(3))],
+  [OUT_C[0] + OUT_S / 2, OUT_C[1] + OUT_S / (2 * Math.sqrt(3))],
+];
+
+export const MAPS = {
+  duel: {
+    name: '1v1', players: 2, gap: NO_MANS_LAND,
+    polys: [[[0, 0], [HALF_W, 0], [HALF_W, H], [0, H]], [[HALF_W, 0], [W, 0], [W, H], [HALF_W, H]]],
+  },
+  crossroads: {
+    name: 'Crossroads', players: 3, gap: NO_MANS_LAND, polys: yPolys(510, false),
+    desc: 'Three big zones meeting in the middle. Every army borders both others.',
+  },
+  close: {
+    name: 'Close Quarters', players: 3, gap: 50, polys: yPolys(495, false),
+    desc: 'The biggest zones and a thin strip of no man\'s land. Fighting starts at once.',
+  },
+  farapart: {
+    name: 'Far Apart', players: 3, gap: 260, polys: yPolys(550, false),
+    desc: 'Wide no man\'s land with a lake where the borders meet and bramble thickets.',
+    terrain(p) {
+      p.disc(HALF_W, 505, 62, T.WATER);
+      p.disc(320, 255, 40, T.BRAMBLE);
+      p.disc(W - 320, 255, 40, T.BRAMBLE);
+      p.disc(HALF_W, 650, 36, T.BRAMBLE);
+    },
+  },
+  inverted: {
+    name: 'Ruins', players: 3, gap: NO_MANS_LAND, polys: yPolys(210, true),
+    desc: 'Flipped: two zones on top, one below. A broken stone ring stands where the borders meet.',
+    terrain(p) {
+      const gates = [-Math.PI / 2, Math.atan2(H - 210, -HALF_W), Math.atan2(H - 210, HALF_W)];
+      p.disc(HALF_W, 210, 70, T.MUD);
+      p.ring(HALF_W, 210, 78, 90, T.WALL, gates, 0.5);
+      // Tumbled wall stubs further out along each border.
+      for (const a of gates) p.seg(HALF_W + Math.cos(a) * 170, 210 + Math.sin(a) * 170, HALF_W + Math.cos(a) * 230, 210 + Math.sin(a) * 230, 12, T.WALL);
+    },
+  },
+  frozen: {
+    name: 'Frozen Rivers', players: 3, gap: 180, polys: yPolys(530, false),
+    desc: 'Rivers of ice run along the borders to a frozen pond in the middle.',
+    terrain(p) {
+      p.seg(HALF_W, 530, 0, 0, 34, T.ICE);
+      p.seg(HALF_W, 530, W, 0, 34, T.ICE);
+      p.seg(HALF_W, 530, HALF_W, H, 34, T.ICE);
+      p.disc(HALF_W, 520, 80, T.ICE);
+      p.disc(HALF_W, 520, 30, T.WATER);
+    },
+  },
+  outposts: {
+    name: 'Outposts', players: 3, gap: 0, polys: OUT_P.map(([x, y]) => octagon(x, y, 150)),
+    desc: 'Three small camps far apart, with a pond in the middle and brambles between them.',
+    terrain(p) {
+      p.disc(OUT_C[0], OUT_C[1], 55, T.WATER);
+      for (let i = 0; i < 3; i++) {
+        const a = OUT_P[i];
+        const b = OUT_P[(i + 1) % 3];
+        p.disc((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, 30, T.BRAMBLE);
+      }
+    },
+  },
+};
+for (const m of Object.values(MAPS)) m.zones = m.polys.map((poly) => toHalfPlanes(poly, m.gap));
+
+/** The 1v1v1 maps, in lobby order. */
+export const FFA_MAPS = Object.keys(MAPS).filter((k) => MAPS[k].players === 3);
+
+/** Map definition for a layout id. Old numeric layouts (2, 3) still work. */
+export function mapOf(layout) {
+  if (layout === 3) return MAPS.crossroads;
+  return MAPS[layout] || MAPS.duel;
+}
+
+/** Number of player zones on a layout. */
+export function zoneCount(layout) {
+  return mapOf(layout).zones.length;
+}
+
+/**
+ * Map for a match with `players` players. `choice` is the lobby's 1v1v1 pick: a map id,
+ * or 'random' to roll one with `rnd` (omit `rnd` for a stand-in, e.g. the lobby preview).
+ */
+export function layoutFor(players, choice = 'random', rnd = null) {
+  if (players < 3) return 'duel';
+  if (FFA_MAPS.includes(choice)) return choice;
+  return rnd ? FFA_MAPS[Math.floor(rnd() * FFA_MAPS.length) % FFA_MAPS.length] : 'crossroads';
 }
 
 export function inZone(side, x, y, margin = 0, layout = 2) {
   if (x < margin || y < margin || x > WORLD.width - margin || y > WORLD.height - margin) return false;
-  const zone = LAYOUTS[layoutFor(layout)][side];
+  const zone = mapOf(layout).zones[side];
   if (!zone) return false;
   for (const [nx, ny, d] of zone) if (nx * x + ny * y < d + margin) return false;
   return true;
+}
+
+const mapTerrainCache = new Map();
+/**
+ * The neutral terrain a map starts with, as a COLS*ROWS grid. It only ever covers
+ * no man's land, so it never clashes with what players draw. Shared by host and clients.
+ */
+export function mapTerrain(layout) {
+  const key = mapOf(layout) === MAPS.duel ? 'duel' : layout === 3 ? 'crossroads' : layout;
+  if (mapTerrainCache.has(key)) return mapTerrainCache.get(key);
+  const m = mapOf(layout);
+  const cols = WORLD.width / WORLD.tile;
+  const rows = WORLD.height / WORLD.tile;
+  const grid = new Uint8Array(cols * rows);
+  const free = (c, r) => {
+    for (let s = 0; s < m.zones.length; s++) if (tileInZone(s, c, r, key)) return false;
+    return true;
+  };
+  const each = (x0, y0, x1, y1, fn) => {
+    const c0 = Math.max(0, Math.floor(x0 / WORLD.tile));
+    const c1 = Math.min(cols - 1, Math.floor(x1 / WORLD.tile));
+    const r0 = Math.max(0, Math.floor(y0 / WORLD.tile));
+    const r1 = Math.min(rows - 1, Math.floor(y1 / WORLD.tile));
+    for (let r = r0; r <= r1; r++) {
+      for (let c = c0; c <= c1; c++) {
+        const x = (c + 0.5) * WORLD.tile;
+        const y = (r + 0.5) * WORLD.tile;
+        const t = fn(x, y);
+        if (t && free(c, r)) grid[r * cols + c] = t;
+      }
+    }
+  };
+  const paint = {
+    disc(cx, cy, rad, t) {
+      each(cx - rad, cy - rad, cx + rad, cy + rad, (x, y) => ((x - cx) ** 2 + (y - cy) ** 2 <= rad * rad ? t : 0));
+    },
+    /** A ring with openings centred on the given angles, each `open` radians wide. */
+    ring(cx, cy, r0, r1, t, openings = [], open = 0.4) {
+      each(cx - r1, cy - r1, cx + r1, cy + r1, (x, y) => {
+        const d = Math.hypot(x - cx, y - cy);
+        if (d < r0 || d > r1) return 0;
+        const a = Math.atan2(y - cy, x - cx);
+        for (const o of openings) if (Math.abs(Math.atan2(Math.sin(a - o), Math.cos(a - o))) < open / 2) return 0;
+        return t;
+      });
+    },
+    /** A straight band `w` px wide from (x0, y0) to (x1, y1). */
+    seg(x0, y0, x1, y1, w, t) {
+      const dx = x1 - x0;
+      const dy = y1 - y0;
+      const len2 = dx * dx + dy * dy || 1;
+      each(Math.min(x0, x1) - w, Math.min(y0, y1) - w, Math.max(x0, x1) + w, Math.max(y0, y1) + w, (x, y) => {
+        const k = Math.max(0, Math.min(1, ((x - x0) * dx + (y - y0) * dy) / len2));
+        return Math.hypot(x - (x0 + dx * k), y - (y0 + dy * k)) <= w / 2 ? t : 0;
+      });
+    },
+  };
+  if (m.terrain) m.terrain(paint);
+  mapTerrainCache.set(key, grid);
+  return grid;
 }
 
 export function tileInZone(side, col, row, layout = 2) {
@@ -67,7 +247,7 @@ export function tileInZone(side, col, row, layout = 2) {
 /** Outline of a side's drawing zone as [[x, y], ...] (the world rect clipped by its half-planes). */
 export function zonePolygon(side, layout = 2) {
   let poly = [[0, 0], [WORLD.width, 0], [WORLD.width, WORLD.height], [0, WORLD.height]];
-  const zone = LAYOUTS[layoutFor(layout)][side] || [];
+  const zone = mapOf(layout).zones[side] || [];
   for (const [nx, ny, d] of zone) {
     const out = [];
     for (let i = 0; i < poly.length; i++) {
@@ -547,6 +727,7 @@ export function defaultSettings() {
     drawTime: 0, // seconds, 0 = no limit
     generals: true, // units level up from kills
     morale: true, // units can break and flee
+    map3: 'random', // 1v1v1 map: a map id, or 'random' for a new one each round
     costs: {
       units: Object.fromEntries(UNITS.filter((u) => !u.spawnOnly).map((u) => [u.key, u.cost])),
       terrain: Object.fromEntries(TERRAIN.filter(Boolean).map((t) => [t.key, t.cost])),
@@ -571,6 +752,7 @@ export function sanitizeSettings(input, prev = defaultSettings()) {
     drawTime: Math.round(clampNum(s.drawTime, 0, 3600, prev.drawTime)),
     generals: typeof s.generals === 'boolean' ? s.generals : prev.generals !== false,
     morale: typeof s.morale === 'boolean' ? s.morale : prev.morale !== false,
+    map3: s.map3 === 'random' || FFA_MAPS.includes(s.map3) ? s.map3 : (prev.map3 || 'random'),
     costs: { units: {}, terrain: {} },
   };
   for (const u of UNITS) {

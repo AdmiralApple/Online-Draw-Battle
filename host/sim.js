@@ -17,7 +17,7 @@
 //     (mines, powder kegs and bombs share one blast model).
 
 import {
-  WORLD, COLS, ROWS, DT, UNITS, UNIT_INDEX, TERRAIN, T, BATTLE_TIME_LIMIT,
+  WORLD, COLS, ROWS, DT, UNITS, UNIT_INDEX, TERRAIN, T, BATTLE_TIME_LIMIT, mapTerrain,
 } from '../shared/config.js';
 import { unitCost } from '../shared/draft.js';
 
@@ -140,7 +140,7 @@ export class Battle {
   /**
    * @param {{drafts: {units: number[][], grid: Uint8Array}[], settings: object, seed: number}} opts
    */
-  constructor({ drafts, settings, seed }) {
+  constructor({ drafts, settings, seed, layout }) {
     this.settings = settings;
     this.generals = settings.generals !== false;
     this.moraleOn = settings.morale !== false; // off: nobody ever breaks and runs
@@ -158,8 +158,8 @@ export class Battle {
     this.units = [];
     this.nextId = 1;
 
-    // Merge every player's terrain into one grid.
-    this.grid = new Uint8Array(COLS * ROWS);
+    // The map's own terrain, then every player's terrain on top.
+    this.grid = layout ? mapTerrain(layout).slice() : new Uint8Array(COLS * ROWS);
     for (const d of drafts) {
       for (let i = 0; i < this.grid.length; i++) if (d.grid[i]) this.grid[i] = d.grid[i];
     }

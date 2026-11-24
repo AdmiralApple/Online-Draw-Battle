@@ -3,7 +3,7 @@
 //   lobby -> draw -> battle -> results -> (draw | lobby)
 
 import {
-  defaultSettings, sanitizeSettings, VISIBILITY, TICK_RATE, SNAPSHOT_EVERY, MAX_PLAYERS, layoutFor,
+  defaultSettings, sanitizeSettings, VISIBILITY, TICK_RATE, SNAPSHOT_EVERY, MAX_PLAYERS, layoutFor, zoneCount,
 } from '../shared/config.js';
 import {
   validateDraft, trimToBudget, encodeGrid, emptyGrid, draftCost, clipDraftToZone,
@@ -27,7 +27,7 @@ export class Room {
     this.onEmpty = onEmpty;
     // Index = side (seat). Seats are kept contiguous: 2 players use 0-1, 3 players 0-2.
     this.players = Array(MAX_PLAYERS).fill(null);
-    this.layout = 2; // map layout of the current match (2 or 3 zones)
+    this.layout = 'duel'; // map of the current match (a MAPS id)
     this.hostToken = null;
     this.settings = defaultSettings();
     this.phase = 'lobby';
@@ -157,7 +157,7 @@ export class Room {
       code: this.code,
       phase: this.phase,
       // In the lobby this previews the map the current players would get.
-      layout: this.phase === 'lobby' ? layoutFor(this.activePlayers().length) : this.layout,
+      layout: this.phase === 'lobby' ? layoutFor(this.activePlayers().length, this.settings.map3) : this.layout,
       settings: this.settings,
       drawDeadline: this.drawDeadline,
       battleStartsAt: this.battleStartsAt,
@@ -279,7 +279,8 @@ export class Room {
     this.result = null;
     this.phase = 'draw';
     this.battleStartsAt = 0;
-    this.layout = layoutFor(this.activePlayers().length);
+    // A 1v1v1 is played on the host's chosen map, or a random one each round.
+    this.layout = layoutFor(this.activePlayers().length, this.settings.map3, Math.random);
     for (const p of this.players) {
       if (!p) continue;
       p.ready = false;
@@ -342,9 +343,9 @@ export class Room {
     if (this.phase !== 'draw') return;
     this.clearTimers();
     for (const p of this.players) if (p) clearTimeout(p.relayTimer);
-    const drafts = this.players.slice(0, this.layout).map((p) => (p ? p.draft : { units: [], grid: emptyGrid() }));
+    const drafts = this.players.slice(0, zoneCount(this.layout)).map((p) => (p ? p.draft : { units: [], grid: emptyGrid() }));
     const seed = (Math.random() * 2 ** 31) | 0;
-    this.battle = new Battle({ drafts, settings: this.settings, seed });
+    this.battle = new Battle({ drafts, settings: this.settings, seed, layout: this.layout });
     this.phase = 'battle';
     this.drawDeadline = 0;
     this.battleStartsAt = Date.now() + COUNTDOWN_MS;

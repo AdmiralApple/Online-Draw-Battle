@@ -6,7 +6,7 @@
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { Hub, LOCAL_ID } from '../host/hub.js';
-import { COLS, UNIT_INDEX, T } from '../shared/config.js';
+import { COLS, UNIT_INDEX, T, zoneCount } from '../shared/config.js';
 import { encodeGrid, emptyGrid } from '../shared/draft.js';
 import { decodeSnapshot, PROTOCOL_VERSION } from '../shared/protocol.js';
 
@@ -104,14 +104,14 @@ try {
   b.send({ t: 'draft', units: [] }); // before joining: ignored
   b.send({ t: 'join', v: PROTOCOL_VERSION, name: 'Bob' });
   let jb = await b.wait((m) => m.t === 'joined', 'joined');
-  if (jb.side !== 1 || jb.room.layout !== 2) fail('Bob should be side 1 on the 1v1 map');
+  if (jb.side !== 1 || zoneCount(jb.room.layout) !== 2) fail('Bob should be side 1 on the 1v1 map');
   ok('Bob joined as side 1 (1v1 map)');
 
   // --- Three players: free-for-all map -------------------------------------------
   const c = new Client('C', 'p2');
   c.send({ t: 'join', v: PROTOCOL_VERSION, name: 'Carol' });
   const jc = await c.wait((m) => m.t === 'joined', 'joined');
-  if (jc.side !== 2 || jc.room.layout !== 3) fail(`Carol should be side 2 on the 3-way map (side ${jc.side}, layout ${jc.room.layout})`);
+  if (jc.side !== 2 || zoneCount(jc.room.layout) !== 3) fail(`Carol should be side 2 on the 3-way map (side ${jc.side}, layout ${jc.room.layout})`);
   ok('Carol joined as side 2; lobby switches to the 1v1v1 map');
 
   const d = new Client('D', 'p3');
@@ -130,7 +130,7 @@ try {
 
   a.send({ t: 'start' });
   const draw3 = await c.wait((m) => m.t === 'room' && m.room.phase === 'draw', '3p draw phase');
-  if (draw3.room.layout !== 3 || draw3.room.you !== 2) fail('3p draw should use layout 3');
+  if (zoneCount(draw3.room.layout) !== 3 || draw3.room.you !== 2) fail('3p draw should use layout 3');
   for (const x of [a, b, c]) await x.wait((m) => m.t === 'yourDraft', 'yourDraft');
   const blob = (cx, cy) => {
     const u = [];
@@ -148,7 +148,7 @@ try {
   ok('3p drafts accepted, out-of-zone unit dropped');
   for (const x of [a, b, c]) x.send({ t: 'ready', ready: true });
   const bs3 = await c.wait((m) => m.t === 'battleStart', '3p battleStart');
-  if (bs3.drafts.length !== 3 || bs3.layout !== 3) fail('3p battle should have 3 drafts');
+  if (bs3.drafts.length !== 3 || zoneCount(bs3.layout) !== 3) fail('3p battle should have 3 drafts');
   const end3 = await a.wait((m) => m.t === 'battleEnd', '3p battleEnd', 190000);
   const r3 = end3.result;
   if (r3.sides !== 3 || r3.survivors.length !== 3) fail('3p result should cover 3 sides');
@@ -162,7 +162,7 @@ try {
   await a.wait((m) => m.t === 'room' && m.room.phase === 'lobby', 'lobby');
   a.send({ t: 'kick', side: 1 });
   await b.wait((m) => m.t === 'kicked', 'Bob kicked');
-  const moved = await c.wait((m) => m.t === 'room' && m.room.you === 1 && m.room.layout === 2, 'Carol moved to seat 1');
+  const moved = await c.wait((m) => m.t === 'room' && m.room.you === 1 && zoneCount(m.room.layout) === 2, 'Carol moved to seat 1');
   if (moved.room.players[1].name !== 'Carol') fail('seat 1 should be Carol');
   ok('kicking seat 1 shifts Carol to seat 1 and the lobby back to 1v1');
 

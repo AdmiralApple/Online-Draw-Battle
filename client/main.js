@@ -2,7 +2,7 @@
 
 import {
   UNITS, TERRAIN, TICK_RATE, COLS, ROWS, VISIBILITY, defaultSettings,
-  WORLD,
+  WORLD, MAPS, FFA_MAPS, mapOf, mapTerrain, zoneCount,
 } from '../shared/config.js';
 import { decodeGrid, emptyGrid } from '../shared/draft.js';
 import { PROTOCOL_VERSION } from '../shared/protocol.js';
@@ -239,7 +239,7 @@ function applyRoom(room) {
   state.phase = room.phase;
   // Seats can shift when someone leaves, so the room tells each player theirs.
   if (Number.isInteger(room.you)) state.side = room.you;
-  if (renderer) renderer.setLayout(room.layout || 2);
+  if (renderer) renderer.setLayout(room.layout || 'duel');
   state.skew = room.serverNow - Date.now();
   if (room.players[state.side]?.host) store.set('ss-rules', JSON.stringify(room.settings));
   if (room.result) state.result = room.result;
@@ -269,9 +269,10 @@ function enterPhase(phase) {
 }
 
 function ensureEditor() {
-  const layout = state.room.layout || 2;
+  const layout = state.room.layout || 'duel';
   if (!state.editor || state.editor.side !== state.side || state.editor.layout !== layout) {
     state.editor = new Editor(state.side, state.room.settings, layout);
+    state.terrainShown = -1;
     state.editor.radius = Number($('brushSize').value);
     state.sentVersion = -1;
   }
@@ -308,6 +309,13 @@ function initHome() {
 let settingsTimer = null;
 
 function initLobby() {
+  const mapSel = $('setMap3');
+  for (const id of FFA_MAPS) {
+    const o = document.createElement('option');
+    o.value = id;
+    o.textContent = MAPS[id].name;
+    mapSel.appendChild(o);
+  }
   const ut = $('unitCosts');
   UNITS.forEach((u, i) => {
     if (u.spawnOnly) return;
@@ -378,6 +386,7 @@ function readSettingsForm() {
     visibility: $('setVisibility').value,
     drawTime: Number($('setDrawTime').value),
     generals: $('setGenerals').value !== 'off',
+    map3: $('setMap3').value,
     morale: $('setMorale').value !== 'off',
     costs: { units: {}, terrain: {} },
   };
@@ -396,7 +405,9 @@ function renderLobby() {
   $('lobbyCode').textContent = room.code;
 
   const count = room.players.filter(Boolean).length;
-  $('mapTag').textContent = room.layout === 3 ? '1v1v1 map' : '1v1 map';
+  $('mapTag').textContent = zoneCount(room.layout) === 3
+    ? `1v1v1: ${room.settings.map3 === 'random' ? 'random map' : mapOf(room.layout).name}`
+    : '1v1 map';
   const list = $('playerList');
   list.innerHTML = '';
   room.players.forEach((p, side) => {
@@ -454,6 +465,8 @@ function renderLobby() {
   setIfIdle($('setBudget'), s.budget);
   setIfIdle($('setVisibility'), s.visibility);
   setIfIdle($('setGenerals'), s.generals === false ? 'off' : 'on');
+  setIfIdle($('setMap3'), s.map3 || 'random');
+  $('map3Desc').textContent = s.map3 && s.map3 !== 'random' ? MAPS[s.map3]?.desc || '' : 'A different map every round.';
   setIfIdle($('setMorale'), s.morale === false ? 'off' : 'on');
   const dt = $('setDrawTime');
   if (![...dt.options].some((o) => Number(o.value) === s.drawTime)) {
@@ -481,7 +494,7 @@ function updateGameChrome() {
   const vs = $('vsLabel');
   vs.innerHTML = '';
   room.players.forEach((p, i) => {
-    if (!p && i >= (room.layout || 2)) return;
+    if (!p && i >= zoneCount(room.layout)) return;
     if (i > 0) vs.append(' vs ');
     const s = document.createElement('span');
     s.className = `s${i}`;
@@ -823,8 +836,9 @@ function initCanvas() {
 // Battle
 // ---------------------------------------------------------------------------
 function startBattleView(msg) {
-  renderer.setLayout(msg.layout || msg.drafts.length);
-  const grid = emptyGrid();
+  const layout = msg.layout ?? msg.drafts.length;
+  renderer.setLayout(layout);
+  const grid = mapTerrain(layout).slice(); // the map's own terrain under the armies'
   for (const d of msg.drafts) {
     const g = decodeGrid(d.terrain);
     for (let i = 0; i < grid.length; i++) if (g[i]) grid[i] = g[i];
@@ -876,16 +890,16 @@ function draftTerrain() {
   if (key === state.terrainShown) return;
   state.terrainShown = key;
   const drafts = Object.entries(state.opDrafts).filter(([os]) => Number(os) !== state.side);
-  if (vis && drafts.length) {
-    const g = ed.grid.slice();
+  // The map's own terrain, then this player's drawing, then visible opponents'.
+  const g = mapTerrain(ed.layout).slice();
+  for (let i = 0; i < g.length; i++) if (ed.grid[i]) g[i] = ed.grid[i];
+  if (vis) {
     for (const [, d] of drafts) {
       const og = d.grid;
       for (let i = 0; i < g.length; i++) if (og[i]) g[i] = og[i];
     }
-    renderer.setTerrain(g);
-  } else {
-    renderer.setTerrain(ed.grid);
   }
+  renderer.setTerrain(g);
 }
 
 function setTimer(text, urgent = false) {
@@ -900,7 +914,7 @@ let lastHud = '';
 let hudKey = '';
 /** (Re)build the battle HUD for 2 or 3 sides: names, unit counts and a strength bar. */
 function buildHud(room) {
-  const n = room.layout || 2;
+  const n = zoneCount(room.layout);
   const names = Array.from({ length: n }, (_, i) => room.players[i]?.name || TEAM[i].name);
   const key = `${n}|${names.join('|')}`;
   if (key === hudKey) return;
@@ -933,7 +947,7 @@ function buildHud(room) {
 }
 
 function updateHud(units) {
-  const n = state.room?.layout || 2;
+  const n = zoneCount(state.room?.layout);
   const counts = new Array(n).fill(0);
   for (const u of units) if (u.side < n && !UNITS[u.type].prop) counts[u.side]++;
   const key = counts.join('|');

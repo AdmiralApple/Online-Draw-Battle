@@ -3,7 +3,10 @@
 //   node test/systems.js
 
 import { Battle } from '../host/sim.js';
-import { COLS, ROWS, UNITS, UNIT_INDEX, T, defaultSettings, TICK_RATE } from '../shared/config.js';
+import {
+  COLS, ROWS, UNITS, UNIT_INDEX, T, defaultSettings, TICK_RATE, MAPS, FFA_MAPS, zoneCount, tileInZone,
+  mapTerrain, layoutFor, sanitizeSettings,
+} from '../shared/config.js';
 import { encodeSnapshot, decodeSnapshot } from '../shared/protocol.js';
 
 const settings = defaultSettings();
@@ -418,6 +421,39 @@ const steps = (b, seconds) => { for (let i = 0; i < seconds * TICK_RATE && !b.ov
     m.units[2].hp = 20;
     check(evs(m, 2, 'cry') > 0, 'level 4 medics mass heal', 'no mass heal');
   }
+}
+
+// 6e. Maps: fair zones, terrain only in no man's land, chosen or random.
+{
+  for (const id of Object.keys(MAPS)) {
+    const n = zoneCount(id);
+    const areas = new Array(n).fill(0);
+    let overlap = 0;
+    let terrainInZone = 0;
+    const base = mapTerrain(id);
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        let inside = 0;
+        for (let s = 0; s < n; s++) if (tileInZone(s, c, r, id)) { areas[s]++; inside++; }
+        if (inside > 1) overlap++;
+        if (inside && base[r * COLS + c]) terrainInZone++;
+      }
+    }
+    const spread = (Math.max(...areas) - Math.min(...areas)) / Math.max(...areas);
+    check(!overlap && spread < 0.03 && !terrainInZone && Math.min(...areas) > 500,
+      `${MAPS[id].name}: ${n} fair zones (${areas.join('/')} tiles)`, `${id} overlap=${overlap} spread=${spread.toFixed(3)} terrainInZone=${terrainInZone}`);
+  }
+  const b = new Battle({ drafts: [{ units: [[U.spear, 640, 60]], grid: grid() }, { units: [[U.spear, 300, 600]], grid: grid() }, { units: [[U.spear, 980, 600]], grid: grid() }], settings, seed: 3, layout: 'farapart' });
+  const lake = mapTerrain('farapart').reduce((n, t, i) => n + (t === T.WATER && b.grid[i] === T.WATER ? 1 : 0), 0);
+  check(lake > 50, 'a battle starts with its map terrain', `lake tiles in battle: ${lake}`);
+  const picks = new Set();
+  let seedV = 1;
+  const rnd = () => ((seedV = (seedV * 16807) % 2147483647) / 2147483647);
+  for (let i = 0; i < 200; i++) picks.add(layoutFor(3, 'random', rnd));
+  check(picks.size === FFA_MAPS.length && layoutFor(3, 'outposts', rnd) === 'outposts' && layoutFor(2, 'outposts', rnd) === 'duel',
+    `1v1v1 maps: a chosen map sticks, random rolls all ${FFA_MAPS.length}`, `picks=${[...picks]}`);
+  check(sanitizeSettings({ map3: 'nowhere' }).map3 === 'random' && sanitizeSettings({ map3: 'frozen' }).map3 === 'frozen',
+    'unknown maps are rejected in settings', 'bad map id accepted');
 }
 
 // 7. Every unit type survives a big mixed battle without errors, and snapshots round-trip.

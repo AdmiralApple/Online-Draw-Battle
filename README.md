@@ -37,6 +37,8 @@ Then open http://localhost:3000. This is only a static file server, needed becau
    - every **unit cost** and **terrain cost per tile**
    - whether the opponent's drawing is **hidden until battle** or **visible live**
    - an optional **draw time limit**
+   - the **1v1v1 map**, or a random one each round
+   - whether **morale** and **generals** are on
 
    The host's browser remembers these rules for the next room.
 2. **Draw.** Paint on your side of the map. The hatched middle strip is no-man's-land.
@@ -44,7 +46,18 @@ Then open http://localhost:3000. This is only a static file server, needed becau
    - The brush size controls how big an area you fill. Small brushes place single units.
    - Right-drag or **E** erases. **Ctrl+Z** undoes. **[** and **]** change the brush size. **1–9** pick from the palette.
    - Painting stops when you run out of budget.
-   The map depends on how many players are in the lobby when the host starts. Two players split the map left and right. Three players get one region each (top, bottom-left, bottom-right), with equal drawing space, and every army fights every other army.
+   The map depends on how many players are in the lobby when the host starts. Two players split the map left and right. Three players get one region each, with equal drawing space, and every army fights every other army. 1v1v1 maps:
+
+   | Map | Layout |
+   |---|---|
+   | Crossroads | Three big zones meeting in the middle |
+   | Close Quarters | The biggest zones and a thin strip of no man's land |
+   | Far Apart | Wide no man's land with a lake and bramble thickets |
+   | Ruins | Flipped: two zones on top, one below, with a broken stone ring where the borders meet |
+   | Frozen Rivers | Ice along the borders and a frozen pond in the middle |
+   | Outposts | Three small camps far apart, with a pond and brambles between them |
+
+   Map terrain only ever sits in no man's land.
 3. **Battle.** Once everyone clicks Ready, or the timer runs out, there's a 3-second countdown and then the fight. The battle ends when only one army is left, or after 3 minutes. At the time limit, whoever kept the biggest share of their army's value wins.
 4. **Results.** The host can start a rematch, which keeps both armies so you can adjust them, or go back to the lobby to change the rules.
 

@@ -1,7 +1,7 @@
 // Canvas 2D renderer: paper, terrain, decals, units, projectiles and effects.
 
 import {
-  WORLD, COLS, ROWS, UNITS, T, zonePolygon, zoneCentre,
+  WORLD, COLS, ROWS, UNITS, T, zonePolygon, zoneCentre, zoneCount,
 } from '../shared/config.js';
 import { sprite, TEAM, INK } from './sprites.js';
 
@@ -87,7 +87,7 @@ export class Renderer {
     };
   }
 
-  /** Switch between the 1v1 (2) and free-for-all (3) map layouts. */
+  /** Switch to another map (a MAPS id). */
   setLayout(layout) {
     if (layout === this.layout) return;
     this.layout = layout;
@@ -114,7 +114,7 @@ export class Renderer {
     for (let x = 0; x <= WORLD.width; x += 40) { g.beginPath(); g.moveTo(x + 0.5, 0); g.lineTo(x + 0.5, WORLD.height); g.stroke(); }
     for (let y = 0; y <= WORLD.height; y += 40) { g.beginPath(); g.moveTo(0, y + 0.5); g.lineTo(WORLD.width, y + 0.5); g.stroke(); }
     // No man's land hatch: everywhere outside the players' zones.
-    const zones = Array.from({ length: layout }, (_, side) => zonePolygon(side, layout));
+    const zones = Array.from({ length: zoneCount(layout) }, (_, side) => zonePolygon(side, layout));
     g.save();
     g.beginPath();
     g.rect(0, 0, WORLD.width, WORLD.height);
@@ -880,7 +880,7 @@ export class Renderer {
   /** Hidden drawing: cover every other player's zone. */
   drawFog(mySide) {
     const ctx = this.ctx;
-    for (let side = 0; side < this.layout; side++) {
+    for (let side = 0; side < zoneCount(this.layout); side++) {
       if (side === mySide) continue;
       const z = zonePolygon(side, this.layout);
       ctx.save();
@@ -901,7 +901,7 @@ export class Renderer {
       const [cx, cy] = zoneCentre(side, this.layout);
       ctx.fillStyle = TEAM[side].dark;
       ctx.globalAlpha = 0.6;
-      ctx.font = `${this.layout > 2 ? 22 : 28}px "Patrick Hand", "Comic Sans MS", cursive`;
+      ctx.font = `${zoneCount(this.layout) > 2 ? 22 : 28}px "Patrick Hand", "Comic Sans MS", cursive`;
       ctx.textAlign = 'center';
       ctx.fillText('Drawing in secret…', cx, cy);
       ctx.globalAlpha = 1;
