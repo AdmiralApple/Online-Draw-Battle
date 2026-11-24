@@ -377,6 +377,7 @@ function readSettingsForm() {
     budget: Number($('setBudget').value),
     visibility: $('setVisibility').value,
     drawTime: Number($('setDrawTime').value),
+    generals: $('setGenerals').value !== 'off',
     costs: { units: {}, terrain: {} },
   };
   for (const inp of document.querySelectorAll('#unitCosts input')) s.costs.units[inp.dataset.unit] = Number(inp.value);
@@ -451,6 +452,7 @@ function renderLobby() {
   const s = room.settings;
   setIfIdle($('setBudget'), s.budget);
   setIfIdle($('setVisibility'), s.visibility);
+  setIfIdle($('setGenerals'), s.generals === false ? 'off' : 'on');
   const dt = $('setDrawTime');
   if (![...dt.options].some((o) => Number(o.value) === s.drawTime)) {
     const o = document.createElement('option');
@@ -626,6 +628,20 @@ function renderResults() {
   for (const [label, v] of rows) {
     const tr = document.createElement('tr');
     tr.innerHTML = `<td>${label}</td>${Array.from({ length: sides }, (_, i) => `<td>${v[i] ?? 0}</td>`).join('')}`;
+    table.appendChild(tr);
+  }
+  // Each army's top unit, by kills.
+  if (r.best && r.best.some(Boolean)) {
+    const tr = document.createElement('tr');
+    const label = document.createElement('td');
+    label.textContent = 'Top unit';
+    tr.appendChild(label);
+    for (let i = 0; i < sides; i++) {
+      const td = document.createElement('td');
+      const b = r.best[i];
+      td.textContent = b ? `${b.title || UNITS[b.type]?.name || '?'} (${b.kills} kill${b.kills === 1 ? '' : 's'})` : '-';
+      tr.appendChild(td);
+    }
     table.appendChild(tr);
   }
   el.appendChild(table);

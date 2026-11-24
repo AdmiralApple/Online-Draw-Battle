@@ -62,6 +62,24 @@ const SKITTISH_RADIUS = 240;
 
 export const PROJ = { ARROW: 0, BOMB: 1, BULLET: 2, BOLT: 3 };
 const CORPSE_TIME = 40; // seconds a corpse stays fresh enough to raise
+
+// Generals: units earn XP from kills (the victim's base cost) and level up to 4.
+const LEVEL_XP = [0, 0, 3, 8, 16]; // XP needed to reach each level
+const LEVEL_DMG = 0.2; // extra damage per level above 1
+const LEVEL_HP = 0.1; // max HP gained per level
+const LEVEL_HEAL = 0.5; // share of max HP healed on levelling up
+const COMMAND_RADIUS = 150; // level 3+ units inspire friends this close
+const INSPIRE_DMG = 0.15;
+const INSPIRE_MORALE = 0.25;
+const NAMES = [
+  'Bram', 'Odo', 'Wren', 'Tamsin', 'Hal', 'Ivo', 'Mira', 'Cole', 'Juno', 'Alder', 'Bess', 'Rook',
+  'Pip', 'Garr', 'Edda', 'Finn', 'Ysolde', 'Hob', 'Nell', 'Corwin', 'Ada', 'Tobin', 'Sable', 'Mott',
+  'Ruth', 'Osric', 'Kit', 'Lark', 'Dunstan', 'Vera', 'Quill', 'Basil', 'Greta', 'Ned', 'Ottilie', 'Fen',
+];
+const EPITHETS = [
+  'Bold', 'Unbroken', 'Fierce', 'Grim', 'Wise', 'Swift', 'Mighty', 'Dread', 'Lionheart', 'Stout',
+  'Relentless', 'Fearless', 'Wallbreaker', 'Iron', 'Red', 'Undying', 'Terrible', 'Lucky', 'Patient', 'Wild',
+];
 const SMOKE_SEE = 50; // units inside a smoke cloud can only be seen this close
 const POND_MAX = 900; // most water tiles one lightning strike electrifies
 const DEFAULT_BOMB_MIN_FRAC = 0.4;
@@ -124,6 +142,7 @@ export class Battle {
    */
   constructor({ drafts, settings, seed }) {
     this.settings = settings;
+    this.generals = settings.generals !== false;
     this.rng = mulberry32(seed || 1);
     this.tick = 0;
     this.time = 0;
@@ -181,6 +200,7 @@ export class Battle {
       shots: perSide(() => 0),
       routed: perSide(() => 0),
       fled: perSide(() => 0),
+      best: perSide(() => null), // each side's unit with the most kills
     };
   }
 
@@ -220,6 +240,7 @@ export class Battle {
       hexCd: 2 + this.rng() * 3, blinkCd: 0, castKind: null, ratFearT: 0, ratX: 0, ratY: 0,
       breathT: 0, breathCd: 1 + this.rng() * 2, roarCd: 0, flyCd: 3, flying: false, flyTX: 0, flyTY: 0, landShock: false,
       hurled: false, hopT: 0, burnt: false, noCorpse: false, grazing: false,
+      xp: 0, lvl: 1, kills: 0, name: '', title: '', inspT: 0, leader: null, abilCd: 0, cmdT: this.rng() * 0.5,
     };
     // Gators remember the nearest pond as home.
     if (d.aquatic?.leash) {
@@ -280,7 +301,7 @@ export class Battle {
 
   emit(ev) {
     // Terrain changes must always reach clients; cosmetic events can be dropped in a flood.
-    if (this.events.length < MAX_EVENTS || ev.k === 'wall' || ev.k === 'tile' || ev.k === 'fire') this.events.push(ev);
+    if (this.events.length < MAX_EVENTS || ev.k === 'wall' || ev.k === 'tile' || ev.k === 'fire' || ev.k === 'lvl') this.events.push(ev);
   }
 
   takeEvents() {
@@ -700,6 +721,10 @@ export class Battle {
     }
     if (!noShield && from && t.def.shield) amount *= this.shieldFactor(t, from);
     if (from && from.plague > 0 && from.plagueInc <= 0) amount *= 0.7; // plague saps strength
+    if (from && !from.prop) {
+      if (from.lvl > 1) amount *= 1 + LEVEL_DMG * (from.lvl - 1);
+      if (from.inspT > 0) amount *= 1 + INSPIRE_DMG;
+    }
     if (t.inWater && t.def.aquatic) amount *= t.def.aquatic.armour;
     if (t.def.rage && amount >= 5) t.rageT = t.def.rage.time;
     if (t.def.provoke && !t.alert && amount >= 2) this.alertHerd(t);
@@ -728,7 +753,10 @@ export class Battle {
   kill(t, from) {
     t.alive = false;
     this.emit({ k: 'die', x: Math.round(t.x), y: Math.round(t.y), s: t.side, ty: t.type });
-    if (from && from.side !== t.side) this.stats.kills[from.side]++;
+    if (from && from.side !== t.side) {
+      this.stats.kills[from.side]++;
+      this.gainXp(from, t);
+    }
     if (t.group) t.group.dead++;
     this.addFear(t.side, t.x, t.y, 90, DEATH_FEAR);
     if (t.infected >= 0) this.rise(t);
@@ -737,6 +765,126 @@ export class Battle {
       if (this.corpses.length > 400) this.corpses.shift();
     }
     if (from && from.def && from.def.rage && from.alive) from.rageT = from.def.rage.time;
+  }
+
+  // --- Generals ------------------------------------------------------------------
+  /** A kill earns XP worth the victim's base cost; enough XP and the killer levels up. */
+  gainXp(u, t) {
+    if (!u || u.prop || !u.alive || !u.def) return;
+    u.kills++;
+    if (this.generals) {
+      const d = t.def;
+      const worth = d.spawnOnly ? (d.parent ? UNITS[UNIT_INDEX[d.parent]].cost * d.share : 0.5) : d.cost;
+      u.xp += Math.max(0.5, worth);
+      while (u.lvl < 4 && u.xp >= LEVEL_XP[u.lvl + 1]) this.levelUp(u);
+    }
+    const b = this.stats.best[u.side];
+    if (!b || b.id === u.id || u.kills > b.kills) {
+      this.stats.best[u.side] = { id: u.id, type: u.type, kills: u.kills, lvl: u.lvl, title: u.title };
+    }
+  }
+
+  levelUp(u) {
+    u.lvl++;
+    const gain = u.maxHp * LEVEL_HP;
+    u.maxHp += gain;
+    u.hp = Math.min(u.maxHp, u.hp + gain + u.maxHp * LEVEL_HEAL);
+    if (u.def.morale.canBreak) {
+      u.morale = Math.max(u.morale, u.def.morale.baseline);
+      u.fleeing = false;
+    }
+    if (!u.name) u.name = NAMES[(this.rng() * NAMES.length) | 0];
+    if (u.lvl === 2) u.title = `Sgt. ${u.name}`;
+    else if (u.lvl === 3) u.title = `Capt. ${u.name}`;
+    else {
+      u.title = `${u.name} the ${EPITHETS[(this.rng() * EPITHETS.length) | 0]}`;
+      u.abilCd = 1;
+    }
+    this.emit({ k: 'lvl', id: u.id, x: Math.round(u.x), y: Math.round(u.y), l: u.lvl, n: u.title, s: u.side });
+  }
+
+  /** Captains (level 3+) inspire nearby friends, rally runners and point idle troops at their target. */
+  command(u) {
+    const t = u.target;
+    this.forNear(u.x, u.y, COMMAND_RADIUS, (o) => {
+      if (o === u || !o.alive || o.prop || o.side !== u.side || o.def.role === 'nest') return;
+      if (o.lvl >= u.lvl && o.lvl >= 3) return; // officers don't take orders from their equals
+      if (Math.hypot(o.x - u.x, o.y - u.y) > COMMAND_RADIUS) return;
+      o.inspT = 0.8;
+      o.leader = u;
+      if (o.fleeing && o.fleeT > 1 && o.def.morale.canBreak) {
+        o.fleeing = false;
+        o.steadyT = 3;
+        o.morale = Math.max(o.morale, o.def.morale.rally);
+      }
+      if (t && t.alive && !o.target && o.def.role !== 'healer'
+        && Math.hypot(t.x - o.x, t.y - o.y) < o.def.sight * 1.3 && this.canTarget(o, t)) o.target = t;
+    });
+  }
+
+  /** Level 4 units get a bonus ability that suits their role. */
+  useAbility(u) {
+    const d = u.def;
+    const t = u.target;
+    if (d.role === 'healer') {
+      // Mass heal.
+      let hurt = 0;
+      this.forNear(u.x, u.y, 130, (o) => {
+        if (o.alive && !o.prop && o.side === u.side && o.hp < o.maxHp * 0.8 && Math.hypot(o.x - u.x, o.y - u.y) < 130) hurt++;
+      });
+      if (hurt < 2) { u.abilCd = 1; return; }
+      this.forNear(u.x, u.y, 130, (o) => {
+        if (!o.alive || o.prop || o.side !== u.side || Math.hypot(o.x - u.x, o.y - u.y) >= 130) return;
+        const amount = Math.min(30, o.maxHp - o.hp);
+        o.hp += amount;
+        this.stats.healed[u.side] += amount;
+        this.extinguish(o, false);
+        o.infected = -1;
+      });
+      this.emit({ k: 'cry', x: Math.round(u.x), y: Math.round(u.y), r: 130, h: 1 });
+      u.abilCd = 10;
+    } else if (d.role === 'melee' && d.melee && !d.hop && !d.pounce && !d.flight) {
+      // Whirlwind: hit everyone around at once.
+      const R = u.r + 30;
+      let n = 0;
+      this.forNear(u.x, u.y, R + MAX_RADIUS, (o) => {
+        if (o.alive && !o.prop && o.side !== u.side && o.z <= 20 && Math.hypot(o.x - u.x, o.y - u.y) < R + o.r) n++;
+      });
+      if (n < 2) { u.abilCd = 0.5; return; }
+      this.forNear(u.x, u.y, R + MAX_RADIUS, (o) => {
+        if (!o.alive || o.prop || o.side === u.side || o.z > 20) return;
+        const dx = o.x - u.x;
+        const dy = o.y - u.y;
+        const dd = Math.hypot(dx, dy) || 1;
+        if (dd >= R + o.r) return;
+        this.damage(o, d.melee.damage * 1.5, u);
+        if (o.alive) this.knock(o, dx / dd, dy / dd, 160, 0.3);
+      });
+      u.attackAnim = 1;
+      this.emit({ k: 'whirl', x: Math.round(u.x), y: Math.round(u.y), r: R });
+      u.abilCd = 7;
+    } else if (d.role === 'ranged' && d.ranged && d.ranged.projectile && t && t.alive) {
+      // Volley: three shots at once.
+      const rg = d.ranged;
+      const dist = Math.hypot(t.x - u.x, t.y - u.y);
+      if (dist > rg.range || (rg.minRange && dist < rg.minRange) || (!rg.lob && !u.los) || u.inWater) { u.abilCd = 0.5; return; }
+      for (let k = 0; k < 3; k++) this.fire(u, t);
+      this.emit({ k: 'volley', x: Math.round(u.x), y: Math.round(u.y) });
+      u.abilCd = 8;
+    } else {
+      // Battle cry: steadies friends, shakes enemies, and second wind for the hero.
+      if (!this.anyEnemyNear(u.side, u.x, u.y, 200)) { u.abilCd = 1; return; }
+      this.forNear(u.x, u.y, 150, (o) => {
+        if (!o.alive || o.prop || !o.def.morale.canBreak || Math.hypot(o.x - u.x, o.y - u.y) >= 150) return;
+        if (o.side === u.side) {
+          o.morale = Math.min(1, o.morale + 0.4);
+          if (o.fleeing) { o.fleeing = false; o.steadyT = 3; }
+        } else o.morale -= 0.1;
+      });
+      u.hp = Math.min(u.maxHp, u.hp + u.maxHp * 0.2);
+      this.emit({ k: 'cry', x: Math.round(u.x), y: Math.round(u.y), r: 150 });
+      u.abilCd = 12;
+    }
   }
 
   /** An infected unit rises again as a ghoul for the side that bit it. */
@@ -865,7 +1013,10 @@ export class Battle {
     t.alive = false;
     t.infected = -1;
     if (t.group) t.group.dead++;
-    if (t.side !== u.side) this.stats.kills[u.side]++;
+    if (t.side !== u.side) {
+      this.stats.kills[u.side]++;
+      this.gainXp(u, t);
+    }
     this.addFear(t.side, t.x, t.y, 90, DEATH_FEAR);
     const f = this.spawn(UNIT_INDEX.frog, t.side, t.x, t.y);
     f.heading = t.heading;
@@ -1479,7 +1630,8 @@ export class Battle {
     const cas = u.group ? u.group.dead / u.group.size : 0;
     const wound = 1 - Math.max(0, u.hp) / u.maxHp;
     const target = m.baseline * u.bravery
-      - Math.max(0, odds - 1) * m.odds - fear * m.fear - cas * m.cas - wound * m.wound;
+      - Math.max(0, odds - 1) * m.odds - fear * m.fear - cas * m.cas - wound * m.wound
+      + (u.inspT > 0 ? INSPIRE_MORALE : 0);
     if (u.morale > target) u.morale = Math.max(target, u.morale - (m.drop ?? MORALE_DROP) * dt);
     else u.morale = Math.min(target, u.morale + (m.recover ?? MORALE_RECOVER) * dt);
     if (u.steadyT > 0) u.morale = Math.max(u.morale, m.brk + 0.02);
@@ -1523,6 +1675,7 @@ export class Battle {
         if (o.fleeing) s *= 3;
       }
       if (d.targeting === 'assassin') s *= o.def.role === 'melee' ? 0.5 : 6;
+      if (u.leader && u.leader.target === o) s *= 3; // focus on the captain's target
       if (d.targeting === 'predator') s *= (o.fleeing ? 3 : 1) * (2 - o.hp / o.maxHp) * (o.mass < 1.5 ? 1.5 : 0.6);
       if (d.flame && o.def.flammability <= 0) s *= 0.05; // flames can't hurt it
       if (d.melee?.infect && o.infected >= 0) s *= 0.3; // already bitten
@@ -1698,6 +1851,10 @@ export class Battle {
 
   advance(u, speed) {
     const t = u.target;
+    // Troops with nothing to fight stay with their captain.
+    if (!t && u.leader && u.leader.alive && Math.hypot(u.leader.x - u.x, u.leader.y - u.y) > 60) {
+      return this.moveTo(u, u.leader.x, u.leader.y, speed);
+    }
     // Charge straight at a visible target, unless that just ran us into a wall
     // (e.g. seeing through a gap too small to fit through): then follow the route.
     if (t && u.los && u.chaseBlock <= 0) {
@@ -2391,6 +2548,8 @@ export class Battle {
     if (u.beatCd > 0) u.beatCd -= DT;
     if (u.ratFearT > 0) u.ratFearT -= DT;
     if (u.rageT > 0) { u.rageT -= DT; u.morale = Math.max(u.morale, 0.6); }
+    if (u.inspT > 0) { u.inspT -= DT; if (u.inspT <= 0) u.leader = null; }
+    if (u.abilCd > 0) u.abilCd -= DT;
     u.spray = false;
     if (u.attackAnim > 0) u.attackAnim = Math.max(0, u.attackAnim - DT / 0.3);
     u.faceAngle = null;
@@ -2529,6 +2688,13 @@ export class Battle {
       // Cornered for too long: turn and fight.
       if (u.fleeT > MAX_FLEE) { u.fleeing = false; u.steadyT = 6; u.morale = d.morale.brk + 0.05; }
     }
+    // Captains command; heroes use their bonus ability.
+    if (u.lvl >= 3 && !u.fleeing) {
+      u.cmdT -= DT;
+      if (u.cmdT <= 0) { u.cmdT = 0.5; this.command(u); }
+      if (u.lvl >= 4 && u.abilCd <= 0 && u.stun <= 0) this.useAbility(u);
+      if (!u.alive) return;
+    }
 
     let dvx = 0;
     let dvy = 0;
@@ -2634,13 +2800,13 @@ export class Battle {
     u.heading = Math.atan2(ty - u.y, tx - u.x);
   }
 
-  /** Push overlapping units apart, heavier units push lighter ones more. Mines lie flat. */
+  /** Push overlapping units apart, heavier units push lighter ones more. Mines and peels lie flat. */
   separate() {
     this.rebuildHash();
     for (const u of this.units) {
-      if (!u.alive || u.def.mine || u.z > 0) continue;
+      if (!u.alive || u.def.mine || u.def.peel || u.z > 0) continue;
       this.forNear(u.x, u.y, u.r + MAX_RADIUS, (o) => {
-        if (o.id <= u.id || !o.alive || o.def.mine || o.z > 0) return;
+        if (o.id <= u.id || !o.alive || o.def.mine || o.def.peel || o.z > 0) return;
         const dx = o.x - u.x;
         const dy = o.y - u.y;
         const min = u.r + o.r;
@@ -2701,6 +2867,7 @@ export class Battle {
       shots: this.stats.shots,
       routed: this.stats.routed,
       fled: this.stats.fled,
+      best: this.stats.best,
     };
   }
 }

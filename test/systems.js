@@ -339,6 +339,76 @@ const steps = (b, seconds) => { for (let i = 0; i < seconds * TICK_RATE && !b.ov
   }
 }
 
+// 6d. Generals: XP, levels, command and level 4 abilities.
+{
+  const evs = (b, seconds, k) => {
+    let n = 0;
+    for (let i = 0; i < seconds * TICK_RATE && !b.over; i++) { b.step(); n += b.takeEvents().filter((e) => e.k === k).length; }
+    return n;
+  };
+  const far = [U.spear, 1250, 40];
+
+  // Kills give XP; levelling up heals, adds a title and more damage.
+  {
+    const b = battle({ units: [[U.spear, 300, 360]], grid: grid() }, { units: [far, [U.golem, 1200, 600]], grid: grid() });
+    const s = b.units[0];
+    const victim = b.units[1];
+    s.hp = 20;
+    b.gainXp(s, victim);
+    check(s.lvl === 1 && s.xp === 2, 'a kill earns XP worth the victim\'s cost', `lvl=${s.lvl} xp=${s.xp}`);
+    b.gainXp(s, victim);
+    check(s.lvl === 2 && s.title.startsWith('Sgt. ') && s.hp > 60, `level 2 heals and earns a title (${s.title})`, `lvl=${s.lvl} title=${s.title} hp=${s.hp}`);
+    const golem = b.units[2];
+    const before = golem.hp;
+    b.damage(golem, 10, s);
+    check(Math.abs(before - golem.hp - 12) < 0.01, 'each level adds 20% damage', `level 2 hit did ${before - golem.hp}`);
+    b.gainXp(b.units[2], s); // the golem kills a pikeman (2 XP)
+    check(b.stats.best[1] && b.stats.best[1].kills === 1, 'best unit per side is tracked', 'no best unit recorded');
+  }
+
+  // With generals turned off, nobody levels up.
+  {
+    const s0 = defaultSettings();
+    s0.generals = false;
+    const b = new Battle({ drafts: [{ units: [[U.spear, 300, 360]], grid: grid() }, { units: [far], grid: grid() }], settings: s0, seed: 5 });
+    const s = b.units[0];
+    for (let i = 0; i < 10; i++) b.gainXp(s, b.units[1]);
+    check(s.lvl === 1 && s.kills === 10, 'generals can be switched off', `lvl=${s.lvl}`);
+  }
+
+  // A captain inspires nearby friends and rallies runners.
+  {
+    const b = battle({ units: [[U.spear, 300, 360], [U.militia, 340, 360], [U.militia, 600, 360]], grid: grid() }, { units: [far], grid: grid() });
+    const [cap, near, away] = b.units;
+    while (cap.lvl < 3) b.levelUp(cap);
+    near.fleeing = true;
+    near.fleeT = 2;
+    near.morale = 0.1;
+    steps(b, 0.7);
+    check(near.inspT > 0 && near.leader === cap && away.inspT <= 0, `captain inspires friends close by (${cap.title})`, `near=${near.inspT} away=${away.inspT}`);
+    check(!near.fleeing, 'captain rallies a routed unit', 'routed unit kept running');
+  }
+
+  // Level 4: melee whirlwind, ranged volley, medic mass heal.
+  {
+    const units1 = [];
+    for (let i = 0; i < 4; i++) units1.push([U.militia, 620 + (i % 2) * 14, 350 + (i >> 1) * 14]);
+    const b = battle({ units: [[U.spear, 600, 360]], grid: grid() }, { units: units1, grid: grid() });
+    while (b.units[0].lvl < 4) b.levelUp(b.units[0]);
+    check(evs(b, 3, 'whirl') > 0, 'level 4 melee units whirlwind', 'no whirlwind');
+
+    const a = battle({ units: [[U.archer, 500, 360]], grid: grid() }, { units: [[U.golem, 700, 360]], grid: grid() });
+    while (a.units[0].lvl < 4) a.levelUp(a.units[0]);
+    check(evs(a, 3, 'volley') > 0, 'level 4 ranged units fire a volley', 'no volley');
+
+    const m = battle({ units: [[U.medic, 500, 360], [U.spear, 520, 360], [U.spear, 520, 380]], grid: grid() }, { units: [far], grid: grid() });
+    while (m.units[0].lvl < 4) m.levelUp(m.units[0]);
+    m.units[1].hp = 20;
+    m.units[2].hp = 20;
+    check(evs(m, 2, 'cry') > 0, 'level 4 medics mass heal', 'no mass heal');
+  }
+}
+
 // 7. Every unit type survives a big mixed battle without errors, and snapshots round-trip.
 {
   const g0 = grid();

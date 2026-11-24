@@ -15,6 +15,8 @@ const TERRAIN_STYLE = {
   [T.BRAMBLE]: { fill: '#86a95c', edge: '#47672d', hi: '#4f7a33' },
   [T.ICE]: { fill: '#dcf0f6', edge: '#8cbfd3', hi: '#ffffff' },
 };
+// Fallback titles by level, for anyone who missed the level-up event (late joiners).
+const RANK_NAMES = ['', '', 'Sergeant', 'Captain', 'Hero'];
 const FLAME = ['#ffb703', '#fb8500', '#e85d04', '#ffd166'];
 
 function hash2(a, b) {
@@ -214,6 +216,7 @@ export class Renderer {
     g.setTransform(1, 0, 0, 1, 0, 0);
     g.clearRect(0, 0, this.decals.width, this.decals.height);
     this.effects.length = 0;
+    this.titles = new Map(); // unit id -> title, from level-up events
   }
 
   splat(x, y, color, size, alpha) {
@@ -374,6 +377,29 @@ export class Renderer {
         break;
       case 'shot':
         this.effects.push({ k: 'flash', x: ev.x, y: ev.y, r: 7, t0: now, life: 0.08 });
+        break;
+      case 'lvl':
+        if (!this.titles) this.titles = new Map();
+        this.titles.set(ev.id, ev.n);
+        this.effects.push({ k: 'ring', x: ev.x, y: ev.y, r0: 4, r1: 22, t0: now, life: 0.6, c: '#e9b949', w: 3 });
+        for (let i = 0; i < 8; i++) {
+          const a = (i / 8) * Math.PI * 2;
+          this.effects.push({ k: 'dot', x: ev.x, y: ev.y, vx: Math.cos(a) * 50, vy: Math.sin(a) * 50 - 20, t0: now, life: 0.6, c: '#e9b949' });
+        }
+        this.effects.push({ k: 'label', x: ev.x, y: ev.y - 16, text: ev.l >= 4 ? 'Hero!' : ev.l === 3 ? 'Captain!' : 'Level up!', t0: now, life: 1.2 });
+        break;
+      case 'whirl':
+        this.effects.push({ k: 'ring', x: ev.x, y: ev.y, r0: ev.r * 0.4, r1: ev.r * 1.1, t0: now, life: 0.35, c: '#e9b949', w: 3 });
+        this.effects.push({ k: 'ring', x: ev.x, y: ev.y, r0: ev.r * 0.7, r1: ev.r * 1.3, t0: now + 0.08, life: 0.3, c: '#8c7a5b', w: 2 });
+        this.shake = Math.min(6, this.shake + 1);
+        break;
+      case 'volley':
+        this.effects.push({ k: 'ring', x: ev.x, y: ev.y, r0: 3, r1: 14, t0: now, life: 0.3, c: '#e9b949', w: 2 });
+        break;
+      case 'cry':
+        for (let i = 0; i < 2; i++) {
+          this.effects.push({ k: 'ring', x: ev.x, y: ev.y, r0: 8, r1: ev.r, t0: now + i * 0.15, life: 0.6, c: ev.h ? 'rgba(63,174,90,0.6)' : 'rgba(233,185,73,0.7)', w: 2.5 });
+        }
         break;
       case 'hurl':
         this.effects.push({ k: 'ring', x: ev.x, y: ev.y, r0: 3, r1: 12, t0: now, life: 0.3, c: '#8c7a5b', w: 1.5 });
@@ -600,6 +626,54 @@ export class Renderer {
       }
     }
 
+    // Ranks: chevrons, titles and a captain's aura. Inspired troops get a small gold mark.
+    const fs = Math.max(6, Math.min(13, 10 / this.scale));
+    ctx.font = `${fs}px "Patrick Hand", "Comic Sans MS", cursive`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.lineJoin = 'round';
+    for (const u of units) {
+      const r = UNITS[u.type].radius;
+      const top = u.y - (u.z || 0) - r;
+      if (u.insp && !(u.lvl > 1)) {
+        ctx.fillStyle = '#e9b949';
+        ctx.beginPath(); ctx.arc(u.x, top - 2.5, 1.3, 0, Math.PI * 2); ctx.fill();
+      }
+      if (!(u.lvl > 1)) continue;
+      if (u.lvl >= 3) {
+        ctx.globalAlpha = 0.35 + 0.15 * Math.sin(now * 3 + u.x);
+        ctx.strokeStyle = '#e9b949';
+        ctx.lineWidth = u.lvl >= 4 ? 2.2 : 1.4;
+        ctx.beginPath(); ctx.arc(u.x, u.y - (u.z || 0), r + 4, 0, Math.PI * 2); ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+      const hasBar = u.hp !== undefined && u.hp < 0.999 && UNITS[u.type].hp >= 150;
+      let y = top - (hasBar ? 8 : 3);
+      ctx.strokeStyle = INK;
+      ctx.fillStyle = '#e9b949';
+      ctx.lineWidth = 0.7;
+      for (let i = 0; i < u.lvl - 1; i++) {
+        const cx = u.x + (i - (u.lvl - 2) / 2) * 5;
+        ctx.beginPath();
+        ctx.moveTo(cx - 2.2, y - 2.5);
+        ctx.lineTo(cx, y - 0.5);
+        ctx.lineTo(cx + 2.2, y - 2.5);
+        ctx.lineTo(cx + 2.2, y - 1.2);
+        ctx.lineTo(cx, y + 0.8);
+        ctx.lineTo(cx - 2.2, y - 1.2);
+        ctx.closePath();
+        ctx.fill(); ctx.stroke();
+      }
+      y -= 3.5;
+      const title = (this.titles && this.titles.get(u.id)) || RANK_NAMES[u.lvl];
+      ctx.lineWidth = fs * 0.28;
+      ctx.strokeStyle = 'rgba(251,247,238,0.9)';
+      ctx.strokeText(title, u.x, y);
+      ctx.fillStyle = u.lvl >= 4 ? '#9a6400' : TEAM[u.side].dark;
+      ctx.fillText(title, u.x, y);
+    }
+    ctx.textBaseline = 'alphabetic';
+
     // Health bars for big units that are hurt.
     ctx.setTransform(k, 0, 0, k, sx * k, sy * k);
     for (const u of units) {
@@ -720,6 +794,15 @@ export class Renderer {
         ctx.globalAlpha = 1;
         ctx.fillStyle = `rgba(${e.c},${0.55 * (1 - f)})`;
         ctx.beginPath(); ctx.arc(e.x, e.y, e.r * (1 + f), 0, Math.PI * 2); ctx.fill();
+      } else if (e.k === 'label') {
+        ctx.globalAlpha = f > 0.7 ? (1 - f) / 0.3 : 1;
+        ctx.font = '11px "Patrick Hand", "Comic Sans MS", cursive';
+        ctx.textAlign = 'center';
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = 'rgba(251,247,238,0.9)';
+        ctx.strokeText(e.text, e.x, e.y - f * 12);
+        ctx.fillStyle = '#9a6400';
+        ctx.fillText(e.text, e.x, e.y - f * 12);
       } else if (e.k === 'arc') {
         ctx.globalAlpha = 0.6 * (1 - f);
         ctx.strokeStyle = '#8c7a5b';

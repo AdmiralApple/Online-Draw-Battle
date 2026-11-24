@@ -13,7 +13,7 @@
 
 export const MSG_SNAPSHOT = 1;
 // Bump whenever host and guest code stop being compatible; mismatched joins are refused.
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 const UNIT_BYTES = 13;
 const PROJ_BYTES = 9;
 const TAU = Math.PI * 2;
@@ -34,6 +34,8 @@ export const FLAG2_CAST = 0x80; // a Stormcaller casting
 export const FLAG3_SICK = 0x01; // plague
 export const FLAG3_HIDDEN = 0x02; // submerged gator or piranha, necromancer: enemies don't see it
 export const FLAG3_RAGE = 0x04;
+export const FLAG3_LEVEL_MASK = 0x18; // (level - 1) << 3
+export const FLAG3_INSPIRED = 0x20; // near a captain
 
 const angleToByte = (a) => Math.round((((a % TAU) + TAU) % TAU) / TAU * 255) & 255;
 const byteToAngle = (b) => (b / 255) * TAU;
@@ -74,6 +76,8 @@ export function encodeSnapshot(tick, units, projectiles) {
     if (u.plague > 0) f3 |= FLAG3_SICK;
     if (u.def && (u.def.stealth || (u.inWater && u.def.aquatic))) f3 |= FLAG3_HIDDEN;
     if (u.rageT > 0) f3 |= FLAG3_RAGE;
+    if (u.lvl > 1) f3 |= ((Math.min(4, u.lvl) - 1) << 3) & FLAG3_LEVEL_MASK;
+    if (u.inspT > 0) f3 |= FLAG3_INSPIRED;
     v.setUint8(o + 12, f3);
     o += UNIT_BYTES;
   }
@@ -102,7 +106,9 @@ export function decodeSnapshot(arrayBuffer) {
     const flags = v.getUint8(o + 9);
     const f2 = v.getUint8(o + 10);
     const f3 = v.getUint8(o + 12);
-    units.set(v.getUint16(o, true), {
+    const id = v.getUint16(o, true);
+    units.set(id, {
+      id,
       type: ts & 0x3f,
       side: ts >> 6,
       x: v.getUint16(o + 3, true) / 32,
@@ -123,6 +129,8 @@ export function decodeSnapshot(arrayBuffer) {
       sick: (f3 & FLAG3_SICK) !== 0,
       hidden: (f3 & FLAG3_HIDDEN) !== 0,
       rage: (f3 & FLAG3_RAGE) !== 0,
+      lvl: ((f3 & FLAG3_LEVEL_MASK) >> 3) + 1,
+      insp: (f3 & FLAG3_INSPIRED) !== 0,
       z: v.getUint8(o + 11),
     });
     o += UNIT_BYTES;
