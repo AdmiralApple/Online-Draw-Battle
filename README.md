@@ -67,6 +67,20 @@ Then open http://localhost:3000. This is only a static file server, needed becau
 | Ghoul | 3 | Slow, then lunges. Bitten units rise as ghouls on the biter's side unless a medic cures them first |
 | Ooze | 6 | Moves by hopping and slams whatever it lands next to. Splits in two when hit, and again, into four small blobs |
 | Stormcaller | 7 | Chain lightning that jumps between enemies. Arcs into metal-clad troops of either side and shocks a whole pond |
+| Rifleman | 3 | Quick rifle shots; reloads after six |
+| Grenadier | 5 | Bouncing grenades. Won't throw if a friend is near the landing spot |
+| Boar | 3 | Grazes until an enemy comes close or it gets hurt, then the whole herd charges and tramples |
+| Rat | 0.5 | Tiny swarming biter that spreads plague. Spooks horses and sends Giants running |
+| Anthill | 8 | Doesn't move. Hatches up to 12 ants that guard the hill |
+| Ape | 7 | Ground smash, rages when hurt, hurls powder kegs and light enemies at its target, beats its chest to scare enemies |
+| Gator | 6 | Hidden in ponds, faster and takes half damage there. Lunges at anything nearby and drags it in |
+| Piranha | 1 | Paint it in a pond. Hidden under water, shreds anyone who wades in, dies on land |
+| Snake | 4 | Swallows wounded prey whole and grows tougher and deadlier with each meal |
+| Cheetah | 6 | Hunts the weak and fleeing: sprints in, pins and mauls, then backs off |
+| Hexer | 8 | Exploding bolts, and turns the strongest enemy nearby into a frog. Sees hidden units, blinks away when cornered |
+| Giant | 22 | Sweeps everything in front aside and sometimes eats a victim to heal. Can't be stunned. Afraid of rats |
+| Dragon | 30 | Fire breath, roar, bite. Flies over walls and water to land among the enemy. Fireproof |
+| Necromancer | 7 | Hidden and harmless. Raises the fallen of every side as skeletons for you, terrifying the enemy |
 
 ### Terrain (cost per 10×10 tile)
 
@@ -86,6 +100,8 @@ Props are placed like units but don't fight, nobody targets them, and they don't
 |---|---|---|
 | Mine | 2 | Hidden from the enemy until it's armed. Any enemy heavy enough to set it off (not Hounds) lights a 0.4 s fuse. Blasts set off nearby mines in a chain |
 | Powder Keg | 3 | Explodes in a fireball when shot, burnt or caught in a blast. Hurts every side |
+| Banana Peel | 0.5 | Anyone running over it slips and falls. Used up after one fall |
+| Tree | 2 | Blocks the way and catches most arrows and bullets. Burns for a long time, spreading fire |
 
 ### Combat systems
 
@@ -95,6 +111,9 @@ Props are placed like units but don't fight, nobody targets them, and they don't
 - **Blasts and throws.** Bombs, mines and kegs share one explosion model: damage falls off with distance, walls shield units, and big hits throw units into the air. They land hard. Lancer charges and Golem smashes can throw too. Lancers bolt from blasts and fire.
 - **Shields, smoke and infection.** Legionaries take far less damage from the front unless stunned or routed. Units inside a smoke cloud can only be seen from close by. A ghoul bite turns most units within a few seconds; Lancers carry it until they die. Golems, oozes and ghouls can't be infected.
 - **Lightning.** Each jump of a Stormcaller's bolt loses a quarter of its power. Legionaries, Firebrands, Lancers and oozes conduct: the bolt reaches them from further away, even on its own side. If it strikes anyone standing in water, everyone in that pond takes a shock.
+- **Plague.** Rats carry it and pass it on by biting and touching. After a few seconds' incubation it drains health and nerve and weakens the sick unit's attacks, and it spreads to anyone touching them. It passes after about 25 seconds, leaving the unit immune. Fire burns it out at once.
+- **Hidden units.** Gators and piranhas in water, and Necromancers, can only be spotted from close by, and the enemy's screen doesn't show them. Hexers see them anyway.
+- **Curses and the dead.** A unit turned into a frog is out of the fight for good. Corpses stay fresh for 40 seconds; a Necromancer raises every fresh corpse near it, whichever side it fell on.
 - **Dodging.** Pikemen, archers, medics, bombardiers and lancers sidestep incoming bombs if they react in time, and step away from a beeping mine.
 
 ## How it's built
@@ -115,7 +134,7 @@ test/smoke.js      Headless end-to-end test
 ```
 
 - **The host's browser is the server.** The room and the battle run in a Web Worker in the host's tab. Worker timers aren't throttled in background tabs, so the battle keeps its pace if the host switches tabs. Both players' drafts are validated against the budget and their zone. The host's own player goes through the same checks as the friend. Because the host's browser runs the simulation, a host who edits the code could cheat. That's fine for games between friends.
-- **Networking.** [PeerJS](https://peerjs.com/) connects each guest's browser to the host's over a WebRTC data channel. The room code maps to a PeerJS ID (`scribble-siege-room-ABCD`) on PeerJS's free public broker, which is only used to make the introduction. Game data goes directly between the players. When strict NATs or firewalls block a direct connection, it goes through PeerJS's public TURN relay instead. Battles stream as binary snapshots at 15 Hz (12 bytes per unit, including burning, fleeing and airborne state), and each client smooths them by interpolation. Mines are sent to everyone and hidden by the client, so like the host's simulation they're on trust between friends.
+- **Networking.** [PeerJS](https://peerjs.com/) connects each guest's browser to the host's over a WebRTC data channel. The room code maps to a PeerJS ID (`scribble-siege-room-ABCD`) on PeerJS's free public broker, which is only used to make the introduction. Game data goes directly between the players. When strict NATs or firewalls block a direct connection, it goes through PeerJS's public TURN relay instead. Battles stream as binary snapshots at 15 Hz (13 bytes per unit, including burning, fleeing, airborne, plague and hidden state), and each client smooths them by interpolation. Mines and hidden units are sent to everyone and hidden by the client, so like the host's simulation they're on trust between friends.
 - **Walls and pathfinding.** Each side gets a Dijkstra flow field toward its nearest enemies. Wall tiles count as passable but very expensive (60 tiles of open ground each), so units walk a long way round to a real gap, but a fully walled-in army still gets a route out. Units on that route, or pinned against a wall (for example by a gap too narrow for them), attack the wall. Each wall tile has 160 HP, and bomb blasts crack walls too. Broken tiles turn into open ground for everyone. Units drawn overlapping a wall are moved to the nearest open spot when the battle starts. `node test/walls.js` covers these cases.
 - **Reconnecting.** If a guest drops, they get their seat back within 2 minutes, including mid-battle. Both sides send heartbeats every 3 seconds, and 15 seconds of silence counts as a disconnect.
 - **Limits.** The match lasts only as long as the host's tab is open. A few very locked-down networks (some school or office firewalls) block WebRTC entirely.

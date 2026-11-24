@@ -262,6 +262,246 @@ const DRAW = {
     circle(ctx, r * 0.45, -r * 0.25, r * 0.14, INK);
     circle(ctx, r * 0.45, r * 0.25, r * 0.14, INK);
   },
+  rifle(ctx, r, c, lw) {
+    line(ctx, -r * 0.2, r * 0.45, r * 2.2, r * 0.45, '#3b3530', lw * 0.9); // rifle
+    line(ctx, r * 0.3, r * 0.45, r * 0.9, r * 0.45, '#7a5230', lw * 1.5);
+    body(ctx, r, c, lw);
+    // Round helmet
+    circle(ctx, -r * 0.1, 0, r * 0.55, '#6b7a4a', INK, lw * 0.5);
+  },
+  grenadier(ctx, r, c, lw) {
+    body(ctx, r, c, lw);
+    circle(ctx, r * 1.05, -r * 0.55, r * 0.38, '#4d5a3a', INK, lw * 0.5); // grenade in hand
+    line(ctx, r * 1.05, -r * 0.9, r * 1.05, -r * 1.15, '#c9ced6', lw * 0.5);
+    // Bandolier of grenades
+    for (let i = 0; i < 3; i++) circle(ctx, -r * 0.55 + i * r * 0.18, -r * 0.6 + i * r * 0.5, r * 0.17, '#4d5a3a', INK, lw * 0.3);
+  },
+  boar(ctx, r, c, lw) {
+    ctx.beginPath();
+    ctx.ellipse(-r * 0.1, 0, r * 1.2, r * 0.78, 0, 0, Math.PI * 2);
+    ctx.fillStyle = '#7b5b45'; ctx.fill();
+    ctx.strokeStyle = INK; ctx.lineWidth = lw; ctx.stroke();
+    line(ctx, -r * 0.9, 0, r * 0.4, 0, c.main, lw * 1.6); // team stripe along the back
+    circle(ctx, r * 1.0, 0, r * 0.5, '#6a4c38', INK, lw); // head
+    for (const s of [-1, 1]) {
+      ctx.beginPath(); // tusks
+      ctx.moveTo(r * 1.3, s * r * 0.25);
+      ctx.quadraticCurveTo(r * 1.75, s * r * 0.35, r * 1.65, s * r * 0.05);
+      ctx.strokeStyle = '#f3ead2'; ctx.lineWidth = lw * 0.8; ctx.stroke();
+    }
+    circle(ctx, r * 1.45, 0, r * 0.18, '#d9a48f');
+  },
+  rat(ctx, r, c, lw) {
+    ctx.beginPath(); // tail
+    ctx.moveTo(-r * 0.9, 0);
+    ctx.quadraticCurveTo(-r * 1.8, r * 0.8, -r * 2.6, r * 0.2);
+    ctx.strokeStyle = '#d9a48f'; ctx.lineWidth = lw * 0.6; ctx.stroke();
+    ctx.beginPath();
+    ctx.ellipse(0, 0, r * 1.15, r * 0.75, 0, 0, Math.PI * 2);
+    ctx.fillStyle = '#8a8580'; ctx.fill();
+    ctx.strokeStyle = INK; ctx.lineWidth = lw; ctx.stroke();
+    circle(ctx, -r * 0.2, 0, r * 0.35, c.main);
+    circle(ctx, r * 0.55, -r * 0.55, r * 0.28, '#d9a48f'); // ears
+    circle(ctx, r * 0.55, r * 0.55, r * 0.28, '#d9a48f');
+    circle(ctx, r * 1.2, 0, r * 0.15, INK);
+  },
+  anthill(ctx, r, c, lw) {
+    circle(ctx, 0, 0, r, '#b08a5a', INK, lw);
+    circle(ctx, 0, 0, r * 0.7, '#9c7748');
+    circle(ctx, 0, 0, r * 0.4, '#87653b');
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.88, 0, Math.PI * 2);
+    ctx.strokeStyle = c.main; ctx.lineWidth = lw * 1.2; ctx.setLineDash([lw * 2, lw * 2]); ctx.stroke(); ctx.setLineDash([]);
+    circle(ctx, 0, 0, r * 0.16, INK); // entrance
+  },
+  ant(ctx, r, c, lw) {
+    for (const s of [-1, 1]) for (let i = -1; i <= 1; i++) line(ctx, i * r * 0.5, 0, i * r * 0.7, s * r * 1.1, INK, lw * 0.4);
+    circle(ctx, -r * 0.8, 0, r * 0.55, '#3b2a20', INK, lw * 0.4);
+    circle(ctx, 0, 0, r * 0.38, c.dark, INK, lw * 0.4);
+    circle(ctx, r * 0.7, 0, r * 0.45, '#3b2a20', INK, lw * 0.4);
+  },
+  ape(ctx, r, c, lw) {
+    circle(ctx, r * 0.55, -r * 0.95, r * 0.42, '#4a3b32', INK, lw); // fists
+    circle(ctx, r * 0.55, r * 0.95, r * 0.42, '#4a3b32', INK, lw);
+    circle(ctx, 0, 0, r, '#5a4a3f', INK, lw);
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.7, 2.2, 4.1);
+    ctx.strokeStyle = c.main; ctx.lineWidth = lw * 1.6; ctx.stroke();
+    circle(ctx, r * 0.6, 0, r * 0.38, '#b89b84', INK, lw * 0.6); // face
+    circle(ctx, r * 0.7, -r * 0.14, r * 0.08, INK);
+    circle(ctx, r * 0.7, r * 0.14, r * 0.08, INK);
+  },
+  gator(ctx, r, c, lw) {
+    ctx.beginPath(); // tail
+    ctx.moveTo(-r * 0.8, -r * 0.35);
+    ctx.lineTo(-r * 2.3, 0);
+    ctx.lineTo(-r * 0.8, r * 0.35);
+    ctx.fillStyle = '#5f7a45'; ctx.fill();
+    ctx.strokeStyle = INK; ctx.lineWidth = lw * 0.7; ctx.stroke();
+    ctx.beginPath();
+    ctx.ellipse(0, 0, r * 1.05, r * 0.55, 0, 0, Math.PI * 2);
+    ctx.fillStyle = '#6b8a4e'; ctx.fill(); ctx.lineWidth = lw; ctx.stroke();
+    ctx.beginPath(); // snout
+    ctx.ellipse(r * 1.35, 0, r * 0.75, r * 0.3, 0, 0, Math.PI * 2);
+    ctx.fillStyle = '#6b8a4e'; ctx.fill(); ctx.stroke();
+    for (let i = 0; i < 4; i++) circle(ctx, -r * 0.6 + i * r * 0.4, 0, r * 0.1, c.main);
+    circle(ctx, r * 0.75, -r * 0.25, r * 0.1, '#f2d45c');
+    circle(ctx, r * 0.75, r * 0.25, r * 0.1, '#f2d45c');
+  },
+  piranha(ctx, r, c, lw) {
+    ctx.beginPath(); // tail fin
+    ctx.moveTo(-r * 0.8, 0);
+    ctx.lineTo(-r * 1.6, -r * 0.6);
+    ctx.lineTo(-r * 1.6, r * 0.6);
+    ctx.closePath();
+    ctx.fillStyle = c.dark; ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(0, 0, r * 1.1, r * 0.75, 0, 0, Math.PI * 2);
+    ctx.fillStyle = '#c2462e'; ctx.fill();
+    ctx.strokeStyle = INK; ctx.lineWidth = lw * 0.7; ctx.stroke();
+    line(ctx, r * 0.6, r * 0.2, r * 1.05, r * 0.2, '#ffffff', lw * 0.5); // teeth
+    circle(ctx, r * 0.45, -r * 0.3, r * 0.14, INK);
+  },
+  snake(ctx, r, c, lw) {
+    ctx.beginPath(); // coiled body trailing behind
+    ctx.moveTo(r * 0.6, 0);
+    ctx.bezierCurveTo(-r * 0.6, -r * 1.3, -r * 1.4, r * 1.3, -r * 2.8, 0);
+    ctx.strokeStyle = INK; ctx.lineWidth = r * 0.95; ctx.lineCap = 'round'; ctx.stroke();
+    ctx.strokeStyle = '#7da34a'; ctx.lineWidth = r * 0.7; ctx.stroke();
+    ctx.setLineDash([r * 0.3, r * 0.5]);
+    ctx.strokeStyle = c.main; ctx.lineWidth = r * 0.3; ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.ellipse(r * 0.8, 0, r * 0.75, r * 0.55, 0, 0, Math.PI * 2);
+    ctx.fillStyle = '#7da34a'; ctx.fill();
+    ctx.strokeStyle = INK; ctx.lineWidth = lw; ctx.stroke();
+    circle(ctx, r * 1.05, -r * 0.25, r * 0.12, INK);
+    circle(ctx, r * 1.05, r * 0.25, r * 0.12, INK);
+    line(ctx, r * 1.5, 0, r * 1.95, 0, '#c0392b', lw * 0.5); // tongue
+  },
+  cheetah(ctx, r, c, lw) {
+    ctx.beginPath();
+    ctx.moveTo(-r * 1.0, 0);
+    ctx.quadraticCurveTo(-r * 1.7, -r * 0.7, -r * 2.3, -r * 0.2);
+    ctx.strokeStyle = '#d9a441'; ctx.lineWidth = lw * 1.1; ctx.stroke();
+    ctx.beginPath();
+    ctx.ellipse(-r * 0.1, 0, r * 1.15, r * 0.62, 0, 0, Math.PI * 2);
+    ctx.fillStyle = '#e3b04b'; ctx.fill();
+    ctx.strokeStyle = INK; ctx.lineWidth = lw; ctx.stroke();
+    for (let i = 0; i < 6; i++) circle(ctx, -r * 0.8 + (i % 3) * r * 0.5, (i < 3 ? -1 : 1) * r * 0.25, r * 0.1, INK);
+    line(ctx, -r * 0.6, 0, r * 0.3, 0, c.main, lw * 1.2);
+    circle(ctx, r * 1.0, 0, r * 0.45, '#e3b04b', INK, lw);
+    circle(ctx, r * 1.25, -r * 0.15, r * 0.07, INK);
+    circle(ctx, r * 1.25, r * 0.15, r * 0.07, INK);
+  },
+  hexer(ctx, r, c, lw) {
+    line(ctx, -r * 0.2, -r * 0.85, r * 1.6, -r * 0.85, '#5a3d6b', lw * 0.9); // wand
+    circle(ctx, r * 1.7, -r * 0.85, r * 0.26, '#c77dff', INK, lw * 0.4);
+    body(ctx, r, c, lw);
+    ctx.beginPath(); // hood
+    ctx.arc(-r * 0.1, 0, r * 0.62, 0, Math.PI * 2);
+    ctx.fillStyle = '#3c2a4d'; ctx.fill();
+    circle(ctx, r * 0.25, 0, r * 0.2, '#c77dff');
+  },
+  frog(ctx, r, c, lw) {
+    for (const s of [-1, 1]) circle(ctx, -r * 0.6, s * r * 0.8, r * 0.4, '#5f9d4a', INK, lw * 0.5);
+    ctx.beginPath();
+    ctx.ellipse(0, 0, r, r * 0.85, 0, 0, Math.PI * 2);
+    ctx.fillStyle = '#6fb352'; ctx.fill();
+    ctx.strokeStyle = INK; ctx.lineWidth = lw; ctx.stroke();
+    for (const s of [-1, 1]) {
+      circle(ctx, r * 0.45, s * r * 0.5, r * 0.3, '#fbf7ee', INK, lw * 0.5);
+      circle(ctx, r * 0.5, s * r * 0.5, r * 0.13, INK);
+    }
+    circle(ctx, -r * 0.2, 0, r * 0.22, c.light);
+  },
+  giant(ctx, r, c, lw) {
+    circle(ctx, r * 0.55, -r * 0.95, r * 0.35, '#d9a48f', INK, lw); // hands
+    circle(ctx, r * 0.55, r * 0.95, r * 0.35, '#d9a48f', INK, lw);
+    circle(ctx, 0, 0, r, c.main, INK, lw);
+    ctx.beginPath(); // tunic belt
+    ctx.arc(0, 0, r * 0.75, -1.4, 1.4);
+    ctx.strokeStyle = '#7a5230'; ctx.lineWidth = lw * 1.5; ctx.stroke();
+    circle(ctx, r * 0.05, 0, r * 0.5, '#d9a48f', INK, lw * 0.8); // bald head
+    circle(ctx, r * 0.35, -r * 0.18, r * 0.07, INK);
+    circle(ctx, r * 0.35, r * 0.18, r * 0.07, INK);
+    ctx.beginPath(); // beard
+    ctx.arc(r * 0.2, 0, r * 0.4, -0.9, 0.9);
+    ctx.strokeStyle = '#6b4a2f'; ctx.lineWidth = lw * 1.2; ctx.stroke();
+  },
+  dragon(ctx, r, c, lw) {
+    for (const s of [-1, 1]) {
+      ctx.beginPath(); // wings
+      ctx.moveTo(-r * 0.2, s * r * 0.4);
+      ctx.lineTo(r * 0.2, s * r * 1.75);
+      ctx.lineTo(-r * 0.6, s * r * 1.45);
+      ctx.lineTo(-r * 1.0, s * r * 1.7);
+      ctx.lineTo(-r * 0.9, s * r * 0.5);
+      ctx.closePath();
+      ctx.fillStyle = c.dark; ctx.fill();
+      ctx.strokeStyle = INK; ctx.lineWidth = lw * 0.7; ctx.stroke();
+    }
+    ctx.beginPath(); // tail
+    ctx.moveTo(-r * 0.8, -r * 0.25);
+    ctx.quadraticCurveTo(-r * 2.0, r * 0.6, -r * 2.9, 0);
+    ctx.quadraticCurveTo(-r * 2.0, r * 0.2, -r * 0.8, r * 0.25);
+    ctx.fillStyle = '#7a2e2e'; ctx.fill(); ctx.stroke();
+    ctx.beginPath();
+    ctx.ellipse(0, 0, r * 1.0, r * 0.62, 0, 0, Math.PI * 2);
+    ctx.fillStyle = '#8c3434'; ctx.fill();
+    ctx.strokeStyle = INK; ctx.lineWidth = lw; ctx.stroke();
+    ctx.beginPath(); // neck and head
+    ctx.ellipse(r * 1.3, 0, r * 0.6, r * 0.32, 0, 0, Math.PI * 2);
+    ctx.fillStyle = '#8c3434'; ctx.fill(); ctx.stroke();
+    for (let i = 0; i < 4; i++) circle(ctx, -r * 0.6 + i * r * 0.4, 0, r * 0.1, '#e9c46a');
+    circle(ctx, r * 1.5, -r * 0.14, r * 0.08, '#ffd166');
+    circle(ctx, r * 1.5, r * 0.14, r * 0.08, '#ffd166');
+  },
+  necro(ctx, r, c, lw) {
+    line(ctx, -r * 0.3, r * 0.85, r * 1.5, r * 0.85, '#d8d2c4', lw * 0.8); // bone staff
+    circle(ctx, r * 1.6, r * 0.85, r * 0.25, '#f3ead2', INK, lw * 0.4);
+    circle(ctx, 0, 0, r, '#2b2622', INK, lw);
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.75, -2.5, 2.5);
+    ctx.strokeStyle = c.main; ctx.lineWidth = lw * 1.2; ctx.stroke();
+    circle(ctx, r * 0.3, 0, r * 0.32, '#f3ead2'); // skull face
+    circle(ctx, r * 0.42, -r * 0.12, r * 0.07, INK);
+    circle(ctx, r * 0.42, r * 0.12, r * 0.07, INK);
+  },
+  skeleton(ctx, r, c, lw) {
+    line(ctx, r * 0.2, -r * 0.6, r * 1.4, -r * 0.5, '#e9e4d6', lw * 0.8); // bony arms
+    line(ctx, r * 0.2, r * 0.6, r * 1.4, r * 0.5, '#e9e4d6', lw * 0.8);
+    circle(ctx, 0, 0, r, '#e9e4d6', INK, lw);
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.75, 2, 4.3);
+    ctx.strokeStyle = c.main; ctx.lineWidth = lw * 1.2; ctx.stroke();
+    circle(ctx, r * 0.45, -r * 0.3, r * 0.18, INK);
+    circle(ctx, r * 0.45, r * 0.3, r * 0.18, INK);
+  },
+  peel(ctx, r, c, lw) {
+    ctx.fillStyle = '#f2d45c';
+    ctx.strokeStyle = INK; ctx.lineWidth = lw * 0.6;
+    for (let i = 0; i < 3; i++) {
+      const a = (i / 3) * Math.PI * 2;
+      ctx.beginPath();
+      ctx.ellipse(Math.cos(a) * r * 0.5, Math.sin(a) * r * 0.5, r * 0.75, r * 0.32, a, 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
+    }
+    circle(ctx, 0, 0, r * 0.3, '#7a5230');
+  },
+  tree(ctx, r, c, lw) {
+    circle(ctx, 0, 0, r * 0.3, '#7a5230', INK, lw * 0.6); // trunk below the leaves
+    ctx.beginPath(); // canopy: a ring of leafy lobes
+    for (let i = 0; i < 7; i++) {
+      const a = (i / 7) * Math.PI * 2;
+      ctx.moveTo(Math.cos(a) * r * 0.62 + r * 0.5, Math.sin(a) * r * 0.62);
+      ctx.arc(Math.cos(a) * r * 0.62, Math.sin(a) * r * 0.62, r * 0.5, 0, Math.PI * 2);
+    }
+    ctx.fillStyle = '#5c8f3e'; ctx.fill();
+    ctx.strokeStyle = INK; ctx.lineWidth = lw * 0.8; ctx.stroke();
+    circle(ctx, 0, 0, r * 0.62, '#6ea34b');
+    circle(ctx, -r * 0.2, -r * 0.2, r * 0.22, '#86bb5f');
+  },
   storm(ctx, r, c, lw) {
     line(ctx, -r * 0.2, r * 0.85, r * 1.7, r * 0.85, '#7a5230', lw * 0.9); // staff
     circle(ctx, r * 1.8, r * 0.85, r * 0.3, '#bde0fe', INK, lw * 0.5);

@@ -217,6 +217,128 @@ const steps = (b, seconds) => { for (let i = 0; i < seconds * TICK_RATE && !b.ov
   }
 }
 
+// 6c. Animals, monsters and the last props.
+{
+  const evs = (b, seconds, k) => {
+    let n = 0;
+    for (let i = 0; i < seconds * TICK_RATE && !b.over; i++) { b.step(); n += b.takeEvents().filter((e) => e.k === k).length; }
+    return n;
+  };
+  const far = [U.spear, 1250, 40];
+
+  // Rats spread plague; fire burns it out.
+  {
+    const b = battle({ units: [[U.rat, 600, 360]], grid: grid() }, { units: [[U.militia, 606, 360], [U.militia, 612, 368]], grid: grid() });
+    const m = b.units[1];
+    for (const u of b.units) if (u.side === 1) u.stun = 99;
+    for (let i = 0; i < 6 * TICK_RATE && m.plague <= 0 && m.alive; i++) b.step();
+    check(m.plague > 0, 'touching a rat spreads plague', 'nobody caught plague from a rat');
+    b.ignite(m, 10);
+    check(m.plague <= 0 && m.immune, 'fire burns the plague out', 'plague survived fire');
+  }
+
+  // Boars graze until an enemy comes close.
+  {
+    const b = battle({ units: [[U.boar, 300, 360], [U.boar, 300, 400]], grid: grid() }, { units: [[U.militia, 1000, 360]], grid: grid() });
+    steps(b, 3);
+    const calm = b.units.filter((u) => u.type === U.boar && !u.alert).length;
+    check(calm === 2, 'boars graze while no enemy is near', `${2 - calm} boars woke up with nobody near`);
+    b.units.find((u) => u.type === U.militia).x = 420;
+    steps(b, 1);
+    const awake = b.units.filter((u) => u.type === U.boar && u.alert).length;
+    check(awake === 2, 'an enemy close by wakes the whole herd', `only ${awake} boars alerted`);
+  }
+
+  // An anthill keeps hatching ants that guard it.
+  {
+    const b = battle({ units: [[U.anthill, 300, 360]], grid: grid() }, { units: [far], grid: grid() });
+    steps(b, 12);
+    const ants = b.units.filter((u) => u.type === U.ant);
+    const near = ants.every((a) => Math.hypot(a.x - 300, a.y - 360) < 120);
+    check(ants.length >= 3 && near, `anthill hatches ants that stay home (${ants.length})`, `ants=${ants.length} near=${near}`);
+  }
+
+  // A gator hides in its pond and is tougher there; piranhas only go for waders.
+  {
+    const g = grid();
+    fill(g, 50, 25, 75, 45, T.WATER);
+    const b = battle({ units: [[U.gator, 620, 350], [U.piranha, 560, 300]], grid: g }, { units: [[U.archer, 950, 350], [U.militia, 950, 100]], grid: grid() });
+    b.step();
+    const gt = b.units[0];
+    const archer = b.units.find((u) => u.type === U.archer);
+    check(gt.inWater && !b.canSee(archer, gt, 330 * 330), 'gator is hidden while in its pond', 'gator visible from far away');
+    const hp = gt.hp;
+    b.damage(gt, 40, archer);
+    check(hp - gt.hp === 20, 'gator takes half damage in water', `gator took ${hp - gt.hp}`);
+    const pir = b.units.find((u) => u.type === U.piranha);
+    check(!b.canTarget(pir, archer) && b.chooseTarget(pir) === null, 'piranhas ignore enemies on dry land', 'piranha targeted a land unit');
+  }
+
+  // A snake swallows a badly wounded victim whole and grows.
+  {
+    const b = battle({ units: [[U.snake, 600, 360]], grid: grid() }, { units: [[U.militia, 615, 360]], grid: grid() });
+    const s = b.units[0];
+    b.units[1].hp = 10;
+    b.units[1].stun = 5;
+    const gulps = evs(b, 3, 'gulp');
+    check(gulps === 1 && s.maxHp > 70, `snake swallows its prey and grows (max HP ${Math.round(s.maxHp)})`, `gulps=${gulps} maxHp=${s.maxHp}`);
+  }
+
+  // A cheetah pounces and pins its prey.
+  {
+    const b = battle({ units: [[U.cheetah, 500, 360]], grid: grid() }, { units: [[U.archer, 720, 360]], grid: grid() });
+    const n = evs(b, 4, 'pounce');
+    check(n > 0, 'cheetah sprints in and pounces', 'cheetah never pounced');
+  }
+
+  // A hexer turns the strongest enemy into a frog.
+  {
+    const b = battle({ units: [[U.hexer, 500, 360]], grid: grid() }, { units: [[U.militia, 700, 330], [U.rider, 700, 390]], grid: grid() });
+    const n = evs(b, 8, 'hex');
+    const frogs = b.units.filter((u) => u.type === U.frog).length;
+    check(n > 0 && frogs > 0, 'hexer turns an enemy into a frog', `hexes=${n} frogs=${frogs}`);
+  }
+
+  // A giant flees from rats.
+  {
+    const b = battle({ units: [[U.giant, 600, 360]], grid: grid() }, { units: [[U.rat, 640, 360]], grid: grid() });
+    const gi = b.units[0];
+    steps(b, 1);
+    check(gi.ratFearT > 0, 'giant is terrified of rats', 'giant ignored a rat');
+  }
+
+  // A walled-in target: the dragon flies over the wall and lands on the far side.
+  {
+    const g = grid();
+    fill(g, 80, 0, 81, ROWS - 1, T.WALL);
+    const b = battle({ units: [[U.dragon, 600, 360]], grid: grid() }, { units: [[U.militia, 900, 360]], grid: g });
+    let flew = false;
+    for (let i = 0; i < 12 * TICK_RATE && !b.over; i++) { b.step(); if (b.units[0].flying) flew = true; }
+    check(flew && (b.over || b.units[0].x > 820), 'dragon flies over a wall to reach its target', `flew=${flew} x=${Math.round(b.units[0].x)}`);
+  }
+
+  // A necromancer raises the fallen as skeletons.
+  {
+    const b = battle({ units: [[U.necro, 300, 360], [U.spear, 340, 360]], grid: grid() }, { units: [far], grid: grid() });
+    for (let i = 0; i < 4; i++) b.corpses.push({ x: 380 + i * 8, y: 420, r: 6, t: 0 });
+    const n = evs(b, 6, 'raise');
+    const sk = b.units.filter((u) => u.type === U.skeleton && u.side === 0).length;
+    check(n > 0 && sk === 4, `necromancer raises skeletons (${sk})`, `raises=${n} skeletons=${sk}`);
+  }
+
+  // Trees catch most arrows; banana peels trip runners.
+  {
+    const b = battle({ units: [[U.archer, 500, 360]], grid: grid() }, { units: [[U.tree, 700, 360], [U.militia, 760, 360]], grid: grid() });
+    b.units[2].stun = 999;
+    steps(b, 12);
+    const tree = b.units.find((u) => u.type === U.tree);
+    check(tree && tree.hp < tree.maxHp, 'trees catch arrows', 'no arrow hit the tree');
+    const p = battle({ units: [[U.peel, 700, 360], [U.archer, 300, 360]], grid: grid() }, { units: [[U.hound, 900, 360]], grid: grid() });
+    const slips = evs(p, 6, 'slip');
+    check(slips === 1, 'a running hound slips on a banana peel', `slips=${slips}`);
+  }
+}
+
 // 7. Every unit type survives a big mixed battle without errors, and snapshots round-trip.
 {
   const g0 = grid();
@@ -230,8 +352,8 @@ const steps = (b, seconds) => { for (let i = 0; i < seconds * TICK_RATE && !b.ov
   const d1 = [];
   UNITS.forEach((u, type) => {
     for (let i = 0; i < 6; i++) {
-      d0.push([type, 120 + (type % 4) * 60 + (i % 3) * 22, 30 + Math.floor(type / 4) * 150 + Math.floor(i / 3) * 40]);
-      d1.push([type, 1160 - (type % 4) * 60 - (i % 3) * 22, 30 + Math.floor(type / 4) * 150 + Math.floor(i / 3) * 40]);
+      d0.push([type, 100 + (type % 8) * 48 + (i % 3) * 14, 40 + Math.floor(type / 8) * 130 + Math.floor(i / 3) * 40]);
+      d1.push([type, 1180 - (type % 8) * 48 - (i % 3) * 14, 40 + Math.floor(type / 8) * 130 + Math.floor(i / 3) * 40]);
     }
   });
   let err = null;

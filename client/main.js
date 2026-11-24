@@ -15,8 +15,8 @@ const $ = (id) => document.getElementById(id);
 const TERRAIN_CHIP = {
   wall: '#6b6f76', water: '#86bfdf', mud: '#a98257', bramble: '#86a95c', ice: '#d4ecf4',
 };
-/** Mines are hidden from the enemy: only their owner sees them, until one is armed. */
-const hiddenFrom = (type, side, mySide, armed = false) => !!UNITS[type].mine && side !== mySide && !armed;
+/** Mines (until armed), submerged gators and piranhas, and necromancers are hidden from the enemy. */
+const hiddenFrom = (type, side, mySide, armed = false, hidden = false) => side !== mySide && ((!!UNITS[type].mine && !armed) || hidden);
 
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -972,7 +972,8 @@ function frame() {
   }
   if (wallsBroke) renderer.setTerrain(state.battleGrid);
   const sample = snaps.sample();
-  let units = sample ? sample.units.filter((u) => !hiddenFrom(u.type, u.side, state.side, u.armed))
+  let units = sample ? sample.units.filter((u) => !hiddenFrom(u.type, u.side, state.side, u.armed, u.hidden))
+      .map((u) => (u.hidden ? { ...u, ghost: 0.55 } : u))
     : (state.battlePreview || []);
   const projectiles = sample ? sample.projectiles : [];
   if (!sample && phase === 'results') units = [];

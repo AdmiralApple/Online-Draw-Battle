@@ -375,6 +375,48 @@ export class Renderer {
       case 'shot':
         this.effects.push({ k: 'flash', x: ev.x, y: ev.y, r: 7, t0: now, life: 0.08 });
         break;
+      case 'hurl':
+        this.effects.push({ k: 'ring', x: ev.x, y: ev.y, r0: 3, r1: 12, t0: now, life: 0.3, c: '#8c7a5b', w: 1.5 });
+        break;
+      case 'beat':
+      case 'roar':
+        for (let i = 0; i < 3; i++) {
+          this.effects.push({ k: 'ring', x: ev.x, y: ev.y, r0: 6, r1: ev.r * (0.4 + i * 0.25), t0: now + i * 0.12, life: 0.6, c: ev.k === 'roar' ? 'rgba(192,57,43,0.55)' : 'rgba(90,74,63,0.5)', w: 2 });
+        }
+        if (ev.k === 'roar') this.shake = Math.min(6, this.shake + 2);
+        break;
+      case 'hex':
+        for (let i = 0; i < 8; i++) {
+          const a = (i / 8) * Math.PI * 2;
+          this.effects.push({ k: 'dot', x: ev.x, y: ev.y, vx: Math.cos(a) * 45, vy: Math.sin(a) * 45, t0: now, life: 0.5, c: '#c77dff' });
+        }
+        this.effects.push({ k: 'ring', x: ev.x, y: ev.y, r0: 14, r1: 3, t0: now, life: 0.4, c: '#c77dff', w: 2.5 });
+        break;
+      case 'blink':
+        this.effects.push({ k: 'ring', x: ev.x, y: ev.y, r0: 10, r1: 2, t0: now, life: 0.3, c: '#c77dff', w: 2 });
+        this.effects.push({ k: 'ring', x: ev.x1, y: ev.y1, r0: 2, r1: 12, t0: now, life: 0.35, c: '#c77dff', w: 2 });
+        break;
+      case 'raise':
+        this.effects.push({ k: 'ring', x: ev.x, y: ev.y, r0: ev.r * 0.2, r1: ev.r, t0: now, life: 0.7, c: 'rgba(120,200,120,0.7)', w: 3 });
+        for (let i = 0; i < 10; i++) {
+          const a = Math.random() * Math.PI * 2;
+          const d = Math.random() * ev.r;
+          this.effects.push({ k: 'puff', x: ev.x + Math.cos(a) * d, y: ev.y + Math.sin(a) * d, vx: 0, vy: -14, t0: now, life: 0.9, r: 3, c: '120,190,120' });
+        }
+        break;
+      case 'gulp':
+        this.effects.push({ k: 'ring', x: ev.x, y: ev.y, r0: 12, r1: 2, t0: now, life: 0.35, c: INK, w: 2 });
+        break;
+      case 'sweep':
+        this.effects.push({ k: 'arc', x: ev.x, y: ev.y, a: ev.a, r: ev.r, t0: now, life: 0.3 });
+        this.shake = Math.min(6, this.shake + 1.5);
+        break;
+      case 'pounce':
+        this.effects.push({ k: 'ring', x: ev.x, y: ev.y, r0: 4, r1: 14, t0: now, life: 0.3, c: '#d9a441', w: 2 });
+        break;
+      case 'takeoff':
+        this.effects.push({ k: 'ring', x: ev.x, y: ev.y, r0: ev.r, r1: ev.r * 2.5, t0: now, life: 0.5, c: 'rgba(140,122,91,0.6)', w: 2.5 });
+        break;
       case 'fled':
         for (let i = 0; i < 4; i++) {
           const a = Math.random() * Math.PI * 2;
@@ -513,7 +555,7 @@ export class Renderer {
     // Firebrands' flame jets, Marksmen's aim lines, Stormcallers' glow, ghoul bites.
     const now = t;
     for (const u of units) {
-      if (!u.spray && !u.aim && !u.cast && !u.infected) continue;
+      if (!u.spray && !u.aim && !u.cast && !u.infected && !u.sick && !u.rage) continue;
       const r = UNITS[u.type].radius;
       const c = Math.cos(u.heading);
       const s = Math.sin(u.heading);
@@ -537,6 +579,16 @@ export class Renderer {
         ctx.strokeStyle = '#8ecae6';
         ctx.lineWidth = 1.5;
         ctx.beginPath(); ctx.arc(u.x, u.y, r * 1.5, 0, Math.PI * 2); ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+      if (u.sick && Math.random() < 0.08) {
+        this.effects.push({ k: 'dot', x: u.x + (Math.random() - 0.5) * r, y: u.y - r * 0.6, vx: 0, vy: -12, t0: now, life: 0.6, c: '#8a9a3a' });
+      }
+      if (u.rage) {
+        ctx.globalAlpha = 0.35 + 0.2 * Math.sin(now * 12);
+        ctx.strokeStyle = '#c0392b';
+        ctx.lineWidth = 1.6;
+        ctx.beginPath(); ctx.arc(u.x, u.y - (u.z || 0), r * 1.2, 0, Math.PI * 2); ctx.stroke();
         ctx.globalAlpha = 1;
       }
       if (u.infected) {
@@ -568,6 +620,14 @@ export class Renderer {
     const ctx = this.ctx;
     ctx.lineCap = 'round';
     for (const p of list) {
+      if (p.kind === 3) {
+        // Plasma bolt: a glowing violet orb.
+        ctx.fillStyle = 'rgba(199,125,255,0.35)';
+        ctx.beginPath(); ctx.arc(p.x, p.y, 5, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#efd9ff';
+        ctx.beginPath(); ctx.arc(p.x, p.y, 2.2, 0, Math.PI * 2); ctx.fill();
+        continue;
+      }
       if (p.kind === 2) {
         // Bullet: a bright streak.
         const c = Math.cos(p.angle);
@@ -619,6 +679,7 @@ export class Renderer {
       const f = (now - e.t0) / e.life;
       if (f >= 1) continue;
       keep.push(e);
+      if (f < 0) continue; // delayed effect, not started yet
       if (e.k === 'dot') {
         e.x += e.vx * dt;
         e.y += e.vy * dt;
@@ -659,6 +720,11 @@ export class Renderer {
         ctx.globalAlpha = 1;
         ctx.fillStyle = `rgba(${e.c},${0.55 * (1 - f)})`;
         ctx.beginPath(); ctx.arc(e.x, e.y, e.r * (1 + f), 0, Math.PI * 2); ctx.fill();
+      } else if (e.k === 'arc') {
+        ctx.globalAlpha = 0.6 * (1 - f);
+        ctx.strokeStyle = '#8c7a5b';
+        ctx.lineWidth = 4 * (1 - f) + 1;
+        ctx.beginPath(); ctx.arc(e.x, e.y, e.r, e.a - 1.1, e.a + 1.1); ctx.stroke();
       } else if (e.k === 'jet') {
         e.x += e.vx * dt;
         e.y += e.vy * dt;
