@@ -2,7 +2,7 @@
 // Wire format: { units: [[typeIndex, x, y], ...], terrain: "<base64 RLE of COLS*ROWS bytes>" }
 
 import {
-  COLS, ROWS, WORLD, UNITS, TERRAIN, MAX_UNITS_PER_PLAYER, inZone, tileInZone,
+  COLS, ROWS, WORLD, UNITS, TERRAIN, inZone, tileInZone,
 } from './config.js';
 
 export function emptyGrid() {
@@ -88,7 +88,6 @@ export function validateDraft(raw, side, settings, layout = 2) {
   const units = [];
   const list = Array.isArray(raw.units) ? raw.units : [];
   for (const u of list) {
-    if (units.length >= MAX_UNITS_PER_PLAYER) break;
     if (!Array.isArray(u) || u.length < 3) continue;
     const type = u[0] | 0;
     const x = Number(u[1]);

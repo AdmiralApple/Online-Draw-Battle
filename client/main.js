@@ -1,10 +1,11 @@
 // Scribble Siege client: screens, networking glue, input and the frame loop.
 
 import {
-  UNITS, TERRAIN, TICK_RATE, COLS, ROWS, VISIBILITY, defaultSettings, MAX_UNITS_PER_PLAYER,
+  UNITS, TERRAIN, TICK_RATE, COLS, ROWS, VISIBILITY, defaultSettings,
   WORLD,
 } from '../shared/config.js';
 import { decodeGrid, emptyGrid } from '../shared/draft.js';
+import { PROTOCOL_VERSION } from '../shared/protocol.js';
 import { HostNet, GuestNet, SnapshotBuffer } from './net.js';
 import { Renderer } from './render.js';
 import { Editor } from './editor.js';
@@ -84,7 +85,7 @@ let net = null;
 const netHandlers = {
   onOpen() {
     $('connBanner').hidden = true;
-    net.send({ t: 'join', name: myName(), token: state.token });
+    net.send({ t: 'join', name: myName(), token: state.token, v: PROTOCOL_VERSION });
   },
   onClose() {
     if (net && !net.closed) $('connBanner').hidden = false;
@@ -143,6 +144,10 @@ function myName() {
 function onMessage(msg) {
   switch (msg.t) {
     case 'joined':
+      if (msg.v !== PROTOCOL_VERSION) {
+        netHandlers.onFatal('This room runs a different version of the game. Both players need to refresh the page (Ctrl+Shift+R).');
+        return;
+      }
       state.side = msg.side;
       state.token = msg.token;
       state.code = msg.room.code;
@@ -566,7 +571,7 @@ function updateBudget() {
   const f = Math.min(1, ed.cost / Math.max(1, ed.budget));
   $('budgetFill').style.width = `${f * 100}%`;
   $('budgetFill').classList.toggle('full', f >= 0.999);
-  $('unitCountText').textContent = `${ed.units.length} unit${ed.units.length === 1 ? '' : 's'}${ed.units.length >= MAX_UNITS_PER_PLAYER ? ' (max)' : ''}`;
+  $('unitCountText').textContent = `${ed.units.length} unit${ed.units.length === 1 ? '' : 's'}`;
   const left = ed.budget - ed.cost;
   for (const b of document.querySelectorAll('#paletteItems .item[data-kind="unit"]')) {
     const u = UNITS[Number(b.dataset.index)];
@@ -992,6 +997,33 @@ function frame() {
 // ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
+// GitHub Pages lets browsers cache each file for 10 minutes, so right after a deploy a
+// browser can end up running a mix of old and new files (for example an old battle sim
+// with a new unit list). Compare each cached file with the server's copy; fetching with
+// cache: 'reload' also refreshes the cache. If anything was stale, reload once.
+const APP_FILES = [
+  'index.html', 'client/style.css', 'client/main.js', 'client/net.js', 'client/render.js',
+  'client/editor.js', 'client/sprites.js', 'host/hub.js', 'host/room.js', 'host/sim.js',
+  'host/worker.js', 'shared/config.js', 'shared/draft.js', 'shared/protocol.js',
+];
+async function healStaleCache() {
+  if (!/^https?:$/.test(location.protocol)) return;
+  try {
+    const stale = await Promise.all(APP_FILES.map(async (f) => {
+      const cached = await (await fetch(f, { cache: 'force-cache' })).text();
+      const fresh = await (await fetch(f, { cache: 'reload' })).text();
+      return cached !== fresh;
+    }));
+    if (!stale.some(Boolean)) return;
+    // Never loop: at most one automatic reload a minute.
+    const last = Number(sessionStorage.getItem('ss-healed') || 0);
+    if (Date.now() - last < 60000) return;
+    sessionStorage.setItem('ss-healed', String(Date.now()));
+    location.reload();
+  } catch { /* offline or storage blocked: carry on with what we have */ }
+}
+healStaleCache();
+
 initHome();
 initLobby();
 initPalette();

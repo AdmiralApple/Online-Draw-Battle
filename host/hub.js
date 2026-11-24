@@ -6,6 +6,7 @@
 // bytes: transport.send(id, stringOrBytes) and transport.close(id, reason).
 
 import { Room } from './room.js';
+import { PROTOCOL_VERSION } from '../shared/protocol.js';
 
 export const LOCAL_ID = 'local';
 const TIMEOUT_MS = 15000; // clients ping every 3 s
@@ -34,7 +35,7 @@ export class Hub {
 
   message(id, text) {
     const c = this.conns.get(id);
-    if (!c || typeof text !== 'string' || text.length > 512 * 1024) return;
+    if (!c || typeof text !== 'string' || text.length > 4 * 1024 * 1024) return;
     c.lastSeen = Date.now();
     let msg;
     try { msg = JSON.parse(text); } catch { return; }
@@ -42,6 +43,11 @@ export class Hub {
 
     if (!c.player) {
       if (msg.t !== 'join') return;
+      if (msg.v !== PROTOCOL_VERSION) {
+        c.handle.send(JSON.stringify({ t: 'error', msg: 'This room runs a different version of the game. Both players need to refresh the page (Ctrl+Shift+R).', fatal: true }));
+        setTimeout(() => c.handle.close('version'), 500);
+        return;
+      }
       const name = String(msg.name || '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 20);
       const res = this.room.join(c.handle, name, typeof msg.token === 'string' ? msg.token : null);
       if (typeof res === 'string') {

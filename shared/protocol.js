@@ -12,6 +12,8 @@
 //     u16 id, u8 kind, u16 x*32, u16 y*32, u8 z, u8 angle(0-255)
 
 export const MSG_SNAPSHOT = 1;
+// Bump whenever host and guest code stop being compatible; mismatched joins are refused.
+export const PROTOCOL_VERSION = 2;
 const UNIT_BYTES = 12;
 const PROJ_BYTES = 9;
 const TAU = Math.PI * 2;

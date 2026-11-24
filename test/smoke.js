@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { Hub, LOCAL_ID } from '../host/hub.js';
 import { COLS, UNIT_INDEX, T } from '../shared/config.js';
 import { encodeGrid, emptyGrid } from '../shared/draft.js';
-import { decodeSnapshot } from '../shared/protocol.js';
+import { decodeSnapshot, PROTOCOL_VERSION } from '../shared/protocol.js';
 
 let failed = false;
 const fail = (msg) => { console.error('FAIL:', msg); failed = true; finish(); };
@@ -95,32 +95,38 @@ function army(side, keys, count) {
 try {
   // The host's own player uses the local connection id.
   const a = new Client('A', LOCAL_ID);
-  a.send({ t: 'join', name: 'Alice' });
+  a.send({ t: 'join', v: PROTOCOL_VERSION, name: 'Alice' });
   const ja = await a.wait((m) => m.t === 'joined', 'joined');
   if (ja.side !== 0 || !ja.room.players[0].host) fail('host should be side 0');
   ok(`room ${ja.room.code} opened, Alice is host on side ${ja.side}`);
 
   let b = new Client('B', 'p1');
   b.send({ t: 'draft', units: [] }); // before joining: ignored
-  b.send({ t: 'join', name: 'Bob' });
+  b.send({ t: 'join', v: PROTOCOL_VERSION, name: 'Bob' });
   let jb = await b.wait((m) => m.t === 'joined', 'joined');
   if (jb.side !== 1 || jb.room.layout !== 2) fail('Bob should be side 1 on the 1v1 map');
   ok('Bob joined as side 1 (1v1 map)');
 
   // --- Three players: free-for-all map -------------------------------------------
   const c = new Client('C', 'p2');
-  c.send({ t: 'join', name: 'Carol' });
+  c.send({ t: 'join', v: PROTOCOL_VERSION, name: 'Carol' });
   const jc = await c.wait((m) => m.t === 'joined', 'joined');
   if (jc.side !== 2 || jc.room.layout !== 3) fail(`Carol should be side 2 on the 3-way map (side ${jc.side}, layout ${jc.room.layout})`);
   ok('Carol joined as side 2; lobby switches to the 1v1v1 map');
 
   const d = new Client('D', 'p3');
-  d.send({ t: 'join', name: 'Dave' });
+  d.send({ t: 'join', v: PROTOCOL_VERSION, name: 'Dave' });
   const full = await d.wait((m) => m.t === 'error', 'room full error');
   if (!full.fatal) fail('room-full error should be fatal');
   await new Promise((r) => setTimeout(r, 600));
   if (!d.closed) fail('fourth player should be disconnected');
   ok('fourth player turned away (room full)');
+
+  const old = new Client('Old', 'p-old');
+  old.send({ t: 'join', name: 'Outdated' }); // a cached old page sends no version
+  const vErr = await old.wait((m) => m.t === 'error', 'version error');
+  if (!vErr.fatal || !/different version/.test(vErr.msg)) fail(`outdated client should get a fatal version error (${vErr.msg})`);
+  ok('client on an old version is refused with a refresh hint');
 
   a.send({ t: 'start' });
   const draw3 = await c.wait((m) => m.t === 'room' && m.room.phase === 'draw', '3p draw phase');
@@ -162,7 +168,7 @@ try {
 
   // Bob comes back (seat 2), then Carol is kicked, so Bob slides to seat 1 for the 1v1 tests.
   b = new Client('B', 'p4');
-  b.send({ t: 'join', name: 'Bob' });
+  b.send({ t: 'join', v: PROTOCOL_VERSION, name: 'Bob' });
   jb = await b.wait((m) => m.t === 'joined', 'joined');
   a.send({ t: 'kick', side: 1 });
   await c.wait((m) => m.t === 'kicked', 'Carol kicked');
@@ -231,7 +237,7 @@ try {
   b.drop();
   await a.wait((m) => m.t === 'room' && m.room.players[1] && !m.room.players[1].connected, 'Bob shown disconnected');
   const b2 = new Client('B2', 'p13');
-  b2.send({ t: 'join', name: 'Bob', token: jb.token });
+  b2.send({ t: 'join', v: PROTOCOL_VERSION, name: 'Bob', token: jb.token });
   const rj = await b2.wait((m) => m.t === 'joined', 'rejoin');
   if (rj.side !== 1) fail('rejoin lost seat');
   await b2.wait((m) => m.t === 'yourDraft', 'draft after rejoin');
@@ -257,7 +263,7 @@ try {
 
   // Leaving on purpose frees the seat straight away (no 2-minute hold).
   const lv = new Client('LV', 'p16');
-  lv.send({ t: 'join', name: 'Leaver' });
+  lv.send({ t: 'join', v: PROTOCOL_VERSION, name: 'Leaver' });
   await lv.wait((m) => m.t === 'joined', 'joined');
   lv.send({ t: 'leave' });
   if (hub.room.players[1]) fail('seat not freed after leave');
@@ -265,7 +271,7 @@ try {
 
   // A silent guest is timed out by the watchdog.
   const d2 = new Client('D2', 'p14');
-  d2.send({ t: 'join', name: 'Dave' });
+  d2.send({ t: 'join', v: PROTOCOL_VERSION, name: 'Dave' });
   await d2.wait((m) => m.t === 'joined', 'joined');
   hub.conns.get('p14').lastSeen = Date.now() - 20000;
   hub.checkTimeouts();
@@ -277,7 +283,7 @@ try {
 
   // Shutting the room down tells the remaining guest.
   const e = new Client('E', 'p15');
-  e.send({ t: 'join', name: 'Eve' });
+  e.send({ t: 'join', v: PROTOCOL_VERSION, name: 'Eve' });
   await e.wait((m) => m.t === 'joined', 'joined');
   hub.shutdown('The host closed the room');
   const bye = await e.wait((m) => m.t === 'error' && m.fatal, 'room closed');

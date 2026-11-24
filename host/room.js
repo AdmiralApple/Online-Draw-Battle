@@ -8,7 +8,7 @@ import {
 import {
   validateDraft, trimToBudget, encodeGrid, emptyGrid, draftCost, clipDraftToZone,
 } from '../shared/draft.js';
-import { encodeSnapshot } from '../shared/protocol.js';
+import { encodeSnapshot, PROTOCOL_VERSION } from '../shared/protocol.js';
 import { Battle } from './sim.js';
 
 const RECONNECT_GRACE_MS = 2 * 60 * 1000;
@@ -122,7 +122,7 @@ export class Room {
 
   /** Bring a newly (re)connected player up to date with whatever phase we're in. */
   welcome(p) {
-    this.send(p, { t: 'joined', token: p.token, side: p.side, room: { ...this.publicState(), you: p.side } });
+    this.send(p, { t: 'joined', v: PROTOCOL_VERSION, token: p.token, side: p.side, room: { ...this.publicState(), you: p.side } });
     this.broadcastRoom();
     if (this.phase === 'draw') {
       this.send(p, { t: 'yourDraft', units: p.draft.units, terrain: encodeGrid(p.draft.grid), cost: p.draft.cost });

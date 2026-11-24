@@ -9,7 +9,6 @@ export const TICK_RATE = 30;
 export const DT = 1 / TICK_RATE;
 export const SNAPSHOT_EVERY = 2; // snapshots at 15 Hz
 export const BATTLE_TIME_LIMIT = 180; // seconds before the battle is decided on points
-export const MAX_UNITS_PER_PLAYER = 700;
 
 // Neutral strip in the middle of the map where nobody may draw.
 export const NO_MANS_LAND = 120;
@@ -222,7 +221,7 @@ export const UNITS = [
     radius: 7, hp: 60, speed: 55, accel: 400, mass: 1.1, sight: 360, spacing: 22,
     role: 'ranged', iq: 'trained', react: 0.4, strength: 1, flammability: 0.5,
     ranged: {
-      range: 320, minRange: 70, keep: 180, damage: 38, cooldown: 3.4, projectile: 'bomb',
+      range: 320, minRange: 70, keep: 180, damage: 38, cooldown: 4.2, projectile: 'bomb',
       speed: 260, spread: 22, aoe: 42, lob: true, knockback: 180,
     },
     morale: { ...HUMAN_MORALE },

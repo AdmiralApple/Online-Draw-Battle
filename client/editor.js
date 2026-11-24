@@ -1,7 +1,7 @@
 // Draw-phase army editor: painting units and terrain within a budget.
 
 import {
-  WORLD, COLS, ROWS, UNITS, TERRAIN, MAX_UNITS_PER_PLAYER, inZone, tileInZone,
+  WORLD, COLS, ROWS, UNITS, TERRAIN, inZone, tileInZone,
 } from '../shared/config.js';
 import { emptyGrid, encodeGrid, tileAt, draftCost } from '../shared/draft.js';
 
@@ -180,7 +180,6 @@ export class Editor {
     const c = this.unitCost(type);
     let added = 0;
     const tryAdd = (x, y) => {
-      if (this.units.length >= MAX_UNITS_PER_PLAYER) { this.blockedReason = 'Unit limit reached'; return; }
       if (this.cost + c > this.budget + 1e-6) { this.blockedReason = 'Out of budget'; return; }
       if (!this.canPlaceAt(x, y, type)) return;
       const u = { type, x: Math.round(x * 2) / 2, y: Math.round(y * 2) / 2 };
