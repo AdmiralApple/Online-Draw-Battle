@@ -143,6 +143,7 @@ export class Battle {
   constructor({ drafts, settings, seed }) {
     this.settings = settings;
     this.generals = settings.generals !== false;
+    this.moraleOn = settings.morale !== false; // off: nobody ever breaks and runs
     this.rng = mulberry32(seed || 1);
     this.tick = 0;
     this.time = 0;
@@ -1217,7 +1218,7 @@ export class Battle {
   }
 
   startFlee(u) {
-    if (u.fleeing) return;
+    if (u.fleeing || !this.moraleOn) return;
     u.fleeing = true;
     u.fleeT = 0;
     u.target = null;
@@ -1624,6 +1625,8 @@ export class Battle {
     if (nearest) u.threat = nearest;
     else if (u.threat && (!u.threat.alive || Math.hypot(u.threat.x - u.x, u.threat.y - u.y) > 300)) u.threat = null;
     if (!m.canBreak) return;
+    // Morale switched off in the lobby: everyone stays steady.
+    if (!this.moraleOn) { u.morale = m.baseline * u.bravery; u.fleeing = false; return; }
 
     const odds = hostile / friend;
     const fear = this.fearAt(u.side, u.x, u.y);

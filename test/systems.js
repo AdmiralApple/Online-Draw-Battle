@@ -102,6 +102,17 @@ const steps = (b, seconds) => { for (let i = 0; i < seconds * TICK_RATE && !b.ov
   check(b.stats.fled[1] > 0, `routed units flee off the map (${b.stats.fled[1]} fled)`, 'no routed unit left the field');
 }
 
+// 5b. With morale switched off in the lobby, the same militia fight to the end.
+{
+  const units1 = [];
+  for (let i = 0; i < 6; i++) units1.push([U.militia, 1150, 300 + i * 20]);
+  const s0 = defaultSettings();
+  s0.morale = false;
+  const b = new Battle({ drafts: [{ units: [[U.golem, 900, 350]], grid: grid() }, { units: units1, grid: grid() }], settings: s0, seed: 5 });
+  steps(b, 30);
+  check(b.stats.routed[1] === 0 && b.stats.fled[1] === 0, 'morale can be switched off: nobody breaks', `routed=${b.stats.routed[1]} fled=${b.stats.fled[1]}`);
+}
+
 // 6. Props don't keep an army alive.
 {
   const b = battle(

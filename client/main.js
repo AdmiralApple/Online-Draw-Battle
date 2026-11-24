@@ -378,6 +378,7 @@ function readSettingsForm() {
     visibility: $('setVisibility').value,
     drawTime: Number($('setDrawTime').value),
     generals: $('setGenerals').value !== 'off',
+    morale: $('setMorale').value !== 'off',
     costs: { units: {}, terrain: {} },
   };
   for (const inp of document.querySelectorAll('#unitCosts input')) s.costs.units[inp.dataset.unit] = Number(inp.value);
@@ -453,6 +454,7 @@ function renderLobby() {
   setIfIdle($('setBudget'), s.budget);
   setIfIdle($('setVisibility'), s.visibility);
   setIfIdle($('setGenerals'), s.generals === false ? 'off' : 'on');
+  setIfIdle($('setMorale'), s.morale === false ? 'off' : 'on');
   const dt = $('setDrawTime');
   if (![...dt.options].some((o) => Number(o.value) === s.drawTime)) {
     const o = document.createElement('option');

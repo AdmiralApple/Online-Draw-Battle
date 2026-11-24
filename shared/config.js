@@ -546,6 +546,7 @@ export function defaultSettings() {
     visibility: VISIBILITY.HIDDEN,
     drawTime: 0, // seconds, 0 = no limit
     generals: true, // units level up from kills
+    morale: true, // units can break and flee
     costs: {
       units: Object.fromEntries(UNITS.filter((u) => !u.spawnOnly).map((u) => [u.key, u.cost])),
       terrain: Object.fromEntries(TERRAIN.filter(Boolean).map((t) => [t.key, t.cost])),
@@ -569,6 +570,7 @@ export function sanitizeSettings(input, prev = defaultSettings()) {
       : s.visibility === VISIBILITY.HIDDEN ? VISIBILITY.HIDDEN : prev.visibility,
     drawTime: Math.round(clampNum(s.drawTime, 0, 3600, prev.drawTime)),
     generals: typeof s.generals === 'boolean' ? s.generals : prev.generals !== false,
+    morale: typeof s.morale === 'boolean' ? s.morale : prev.morale !== false,
     costs: { units: {}, terrain: {} },
   };
   for (const u of UNITS) {
