@@ -156,12 +156,34 @@ const DRAW = {
     circle(ctx, r * 0.55, r * 0.22, r * 0.12, c.light);
     line(ctx, -r * 0.4, -r * 0.3, -r * 0.1, r * 0.1, '#6e6b65', lw * 0.6); // crack
   },
+  mine(ctx, r, c, lw) {
+    // A flat disc with a team-coloured pressure plate.
+    circle(ctx, 0, 0, r, '#55524c', INK, lw);
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      circle(ctx, Math.cos(a) * r * 0.72, Math.sin(a) * r * 0.72, r * 0.12, '#8d8a83');
+    }
+    circle(ctx, 0, 0, r * 0.42, c.main, INK, lw * 0.6);
+  },
+  keg(ctx, r, c, lw) {
+    // Seen from above: a round barrel lid with staves, hoops and a fuse.
+    circle(ctx, 0, 0, r, '#a8713f', INK, lw);
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.78, 0, Math.PI * 2);
+    ctx.strokeStyle = '#5b5650'; ctx.lineWidth = lw * 0.9; ctx.stroke();
+    line(ctx, -r * 0.6, -r * 0.25, r * 0.6, -r * 0.25, '#7d4f2a', lw * 0.5);
+    line(ctx, -r * 0.6, r * 0.25, r * 0.6, r * 0.25, '#7d4f2a', lw * 0.5);
+    circle(ctx, r * 0.15, 0, r * 0.22, c.main, INK, lw * 0.5); // team bung
+    line(ctx, r * 0.15, 0, r * 0.9, -r * 0.8, '#c9a26b', lw * 0.6); // fuse
+    circle(ctx, r * 0.9, -r * 0.8, r * 0.14, '#ffb703');
+  },
 };
 
 const cache = new Map();
 
 /**
- * Get a cached sprite for a unit type/side. `variant` is 'normal' or 'hurt'.
+ * Get a cached sprite for a unit type/side. `variant` is 'normal', 'hurt' (flash white)
+ * or 'flee' (washed out, for routed units).
  * Returns { img, ox, oy, w, h } in world units (draw at -ox,-oy with size w,h).
  */
 export function sprite(type, side, variant = 'normal') {
@@ -182,10 +204,10 @@ export function sprite(type, side, variant = 'normal') {
   ctx.translate(extentX, extentY);
   const lw = Math.max(1, r * 0.16);
   DRAW[def.key](ctx, r, TEAM[side], lw);
-  if (variant === 'hurt') {
+  if (variant === 'hurt' || variant === 'flee') {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalCompositeOperation = 'source-atop';
-    ctx.fillStyle = 'rgba(255,255,255,0.75)';
+    ctx.fillStyle = variant === 'hurt' ? 'rgba(255,255,255,0.75)' : 'rgba(255,255,255,0.45)';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   }
   s = { img: canvas, ox: extentX, oy: extentY, w, h };

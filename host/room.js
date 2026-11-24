@@ -132,7 +132,7 @@ export class Room {
     } else if (this.phase === 'battle' && this.battle) {
       this.send(p, {
         t: 'battleStart', startsAt: this.battleStartsAt, serverNow: Date.now(), drafts: this.battleDrafts,
-        layout: this.layout, broken: this.battle.broken,
+        layout: this.layout, broken: this.battle.broken, tiles: this.battle.tileChanges(),
       });
       if (!this.loop && Date.now() >= this.battleStartsAt) this.startLoop();
     }
@@ -356,6 +356,7 @@ export class Room {
       drafts: this.battleDrafts,
       layout: this.layout,
       broken: [],
+      tiles: [],
     });
     this.broadcastRoom();
     // Send one snapshot so clients can render the armies during the countdown.

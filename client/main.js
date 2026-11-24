@@ -11,7 +11,11 @@ import { Editor } from './editor.js';
 import { unitIcon, TEAM } from './sprites.js';
 
 const $ = (id) => document.getElementById(id);
-const TERRAIN_CHIP = { wall: '#6b6f76', water: '#86bfdf', mud: '#a98257', bramble: '#86a95c' };
+const TERRAIN_CHIP = {
+  wall: '#6b6f76', water: '#86bfdf', mud: '#a98257', bramble: '#86a95c', ice: '#d4ecf4',
+};
+/** Mines are hidden from the enemy: only their owner sees them, until one is armed. */
+const hiddenFrom = (type, side, mySide, armed = false) => !!UNITS[type].mine && side !== mySide && !armed;
 
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -502,19 +506,21 @@ function renderPalette() {
   box.innerHTML = '';
   const ed = state.editor;
   const s = state.room.settings;
+  // Number keys pick the n-th button, so the hint is the button's position in the palette.
+  const unitButton = (u, i) => {
+    const b = document.createElement('button');
+    b.className = 'item';
+    b.title = `${u.name} (${box.children.length + 1}): ${u.desc}`;
+    b.dataset.kind = 'unit';
+    b.dataset.index = String(i);
+    b.appendChild(unitIcon(i, state.side, 44));
+    const n = document.createElement('span'); n.textContent = u.name; b.appendChild(n);
+    const c = document.createElement('span'); c.className = 'cost'; c.textContent = fmt(s.costs.units[u.key]); b.appendChild(c);
+    b.onclick = () => { ed.tool = { kind: 'unit', type: i }; state.eraser = false; syncToolUI(); };
+    box.appendChild(b);
+  };
   if (state.tab === 'units') {
-    UNITS.forEach((u, i) => {
-      const b = document.createElement('button');
-      b.className = 'item';
-      b.title = `${u.name} (${i + 1}): ${u.desc}`;
-      b.dataset.kind = 'unit';
-      b.dataset.index = String(i);
-      b.appendChild(unitIcon(i, state.side, 44));
-      const n = document.createElement('span'); n.textContent = u.name; b.appendChild(n);
-      const c = document.createElement('span'); c.className = 'cost'; c.textContent = fmt(s.costs.units[u.key]); b.appendChild(c);
-      b.onclick = () => { ed.tool = { kind: 'unit', type: i }; state.eraser = false; syncToolUI(); };
-      box.appendChild(b);
-    });
+    UNITS.forEach((u, i) => { if (!u.prop) unitButton(u, i); });
   } else {
     TERRAIN.forEach((t, id) => {
       if (!t) return;
@@ -529,6 +535,8 @@ function renderPalette() {
       b.onclick = () => { ed.tool = { kind: 'terrain', id }; state.eraser = false; syncToolUI(); };
       box.appendChild(b);
     });
+    // Props (mines, kegs) are placed like units but live on the Terrain tab.
+    UNITS.forEach((u, i) => { if (u.prop) unitButton(u, i); });
   }
   syncToolUI();
 }
@@ -607,7 +615,7 @@ function renderResults() {
   table.appendChild(head);
   const rows = [
     ['Units drawn', r.start], ['Survivors', r.survivors], ['Kills', r.kills],
-    ['HP healed', r.healed], ['Shots fired', r.shots],
+    ['HP healed', r.healed], ['Shots fired', r.shots], ['Fled the field', r.fled],
   ];
   for (const [label, v] of rows) {
     const tr = document.createElement('tr');
@@ -798,6 +806,7 @@ function startBattleView(msg) {
     for (let i = 0; i < grid.length; i++) if (g[i]) grid[i] = g[i];
   }
   for (const i of msg.broken || []) grid[i] = 0; // walls already broken (rejoining mid-battle)
+  for (const [i, t] of msg.tiles || []) grid[i] = t; // burnt brambles, melted ice
   state.battleGrid = grid;
   renderer.setTerrain(grid);
   state.terrainShown = -2; // battle terrain, don't overwrite with draft terrain
@@ -808,9 +817,9 @@ function startBattleView(msg) {
   state.battleStartsLocal = msg.startsAt - msg.serverNow + Date.now();
   if (state.editor) state.editor.locked = true;
   // Show the armies straight away while the countdown runs.
-  state.battlePreview = msg.drafts.map((d, side) => d.units.map(([type, x, y]) => ({
-    type, side, x, y, heading: faceCentre(x, y), attack: 0, hp: 1,
-  }))).flat();
+  state.battlePreview = msg.drafts.map((d, side) => d.units
+    .filter(([type]) => !hiddenFrom(type, side, state.side))
+    .map(([type, x, y]) => ({ type, side, x, y, heading: faceCentre(x, y), attack: 0, hp: 1 }))).flat();
 }
 
 // ---------------------------------------------------------------------------
@@ -825,6 +834,7 @@ function draftUnitsView() {
       const side = Number(os);
       if (side === state.side) continue;
       for (const [type, x, y] of d.units) {
+        if (hiddenFrom(type, side, state.side)) continue;
         list.push({ type, side, x, y, heading: faceCentre(x, y), attack: 0, ghost: 0.75 });
       }
     }
@@ -901,7 +911,7 @@ function buildHud(room) {
 function updateHud(units) {
   const n = state.room?.layout || 2;
   const counts = new Array(n).fill(0);
-  for (const u of units) if (u.side < n) counts[u.side]++;
+  for (const u of units) if (u.side < n && !UNITS[u.type].prop) counts[u.side]++;
   const key = counts.join('|');
   if (key === lastHud) return;
   lastHud = key;
@@ -952,10 +962,12 @@ function frame() {
   for (const ev of snaps.takeDueEvents(snaps.renderTick())) {
     renderer.addEvent(ev);
     if (ev.k === 'wall' && state.battleGrid) { state.battleGrid[ev.i] = 0; wallsBroke = true; }
+    if (ev.k === 'tile' && state.battleGrid) { state.battleGrid[ev.i] = ev.t; wallsBroke = true; }
   }
   if (wallsBroke) renderer.setTerrain(state.battleGrid);
   const sample = snaps.sample();
-  let units = sample ? sample.units : (state.battlePreview || []);
+  let units = sample ? sample.units.filter((u) => !hiddenFrom(u.type, u.side, state.side, u.armed))
+    : (state.battlePreview || []);
   const projectiles = sample ? sample.projectiles : [];
   if (!sample && phase === 'results') units = [];
   renderer.frame({ mode: 'battle', mySide: state.side, units, projectiles, fog: false, brush: null, showZones: false });

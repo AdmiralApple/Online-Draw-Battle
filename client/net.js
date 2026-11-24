@@ -458,6 +458,7 @@ export class SnapshotBuffer {
         y: ua.y + (ub.y - ua.y) * t,
         heading: ua.heading + dh * t,
         attack: ua.attack + (ub.attack - ua.attack) * t,
+        z: ua.z + (ub.z - ua.z) * t,
       });
     }
     const projectiles = [];

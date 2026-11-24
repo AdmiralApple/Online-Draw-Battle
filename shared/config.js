@@ -107,7 +107,7 @@ export function zoneCentre(side, layout = 2) {
 // ---------------------------------------------------------------------------
 // Terrain. Costs are per tile (10x10 px). A brush stroke covers many tiles.
 // ---------------------------------------------------------------------------
-export const T = { NONE: 0, WALL: 1, WATER: 2, MUD: 3, BRAMBLE: 4 };
+export const T = { NONE: 0, WALL: 1, WATER: 2, MUD: 3, BRAMBLE: 4, ICE: 5 };
 
 export const TERRAIN = [
   null,
@@ -128,8 +128,13 @@ export const TERRAIN = [
   },
   {
     id: T.BRAMBLE, key: 'bramble', name: 'Brambles', cost: 0.15,
-    solid: false, speed: 0.8, dps: 7,
-    desc: 'Slightly slows and slowly hurts anyone inside.',
+    solid: false, speed: 0.8, dps: 7, flammable: true,
+    desc: 'Slows and scratches anyone inside. Burns: fire races through it and sets units alight.',
+  },
+  {
+    id: T.ICE, key: 'ice', name: 'Ice', cost: 0.1,
+    solid: false, speed: 1, dps: 0, slippery: true,
+    desc: 'Almost no grip. Fast units skid and fall. Blasts and fire melt it into water.',
   },
 ];
 
@@ -137,71 +142,126 @@ export const TERRAIN_KEYS = TERRAIN.filter(Boolean).map((t) => t.key);
 
 // ---------------------------------------------------------------------------
 // Units. `spacing` is the brush grid spacing when painting them.
+//
+// Behaviour stats (all optional, see UNIT_DEFAULTS below):
+//   iq           'trained' (dodges bombs, avoids mines and burning ground),
+//                'animal' (runs to water when burning) or 'mindless' (neither)
+//   react        base reaction time (s) before acting on a newly spotted target
+//   strength     how much this unit counts for in morale odds
+//   flammability 0 = fireproof, 1 = catches fire very easily
+//   iceGrip      traction multiplier on ice (1 = full grip)
+//   targeting    'swarm' (prefers ranged and support units, chases runners) or
+//                'sticky' (keeps its target unless a much closer one turns up)
+//   skittish     bolts away from explosions and fire
+//   noStun       ignores stuns and can't be thrown
+//   morale       { canBreak, baseline, brk, rally, odds, cas, wound, shock, supp, fear, minFlee }
+//
+// Props (`prop: true`) are placed like units but don't fight, aren't targeted and don't
+// count towards an army's survival. The palette lists them in the Terrain tab.
 // ---------------------------------------------------------------------------
+const HUMAN_MORALE = {
+  canBreak: true, baseline: 0.82, brk: 0.22, rally: 0.55, odds: 0.55,
+  cas: 0.35, wound: 0.25, shock: 0.025, supp: 0.03, fear: 1, minFlee: 2.5,
+};
+
 export const UNITS = [
   {
     key: 'militia', name: 'Militia', cost: 1,
     radius: 6, hp: 60, speed: 72, accel: 500, mass: 1, sight: 320, spacing: 16,
-    role: 'melee',
+    role: 'melee', iq: 'animal', react: 0.45, strength: 0.8, flammability: 0.5,
     melee: { damage: 8, cooldown: 0.8, reach: 3 },
-    desc: 'Cheap, plentiful, not very brave or strong.',
+    morale: { ...HUMAN_MORALE, baseline: 0.75, brk: 0.28, odds: 0.7, cas: 0.5, shock: 0.035 },
+    desc: 'Cheap and plentiful, but not brave. Breaks and runs when outnumbered.',
   },
   {
     key: 'spear', name: 'Pikeman', cost: 2,
     radius: 7, hp: 95, speed: 60, accel: 450, mass: 1.3, sight: 320, spacing: 17,
-    role: 'melee',
+    role: 'melee', iq: 'trained', react: 0.3, strength: 1.2, flammability: 0.3, targeting: 'sticky',
     melee: { damage: 10, cooldown: 0.9, reach: 9, bonusVsMounted: 3 },
-    desc: 'Long reach. Triple damage against riders and golems.',
+    morale: { ...HUMAN_MORALE, baseline: 0.9, brk: 0.2, rally: 0.5, odds: 0.4, cas: 0.2 },
+    desc: 'Long reach and steady nerves. Triple damage against riders and golems.',
   },
   {
     key: 'archer', name: 'Archer', cost: 3,
     radius: 6.5, hp: 50, speed: 62, accel: 450, mass: 1, sight: 340, spacing: 18,
-    role: 'ranged',
+    role: 'ranged', iq: 'trained', react: 0.3, strength: 0.7, flammability: 0.4,
     ranged: {
       range: 270, keep: 150, damage: 14, cooldown: 1.6, projectile: 'arrow',
       speed: 430, spread: 14, aoe: 0, lob: false,
     },
-    desc: 'Shoots arrows from range and backs away from melee. Walls block shots.',
+    morale: { ...HUMAN_MORALE },
+    desc: 'Shoots from range and backs away from melee. Near misses rattle the enemy. Walls block arrows.',
   },
   {
     key: 'hound', name: 'Hound', cost: 2,
     radius: 6, hp: 55, speed: 118, accel: 900, mass: 0.9, sight: 380, spacing: 16,
-    role: 'melee',
+    role: 'melee', iq: 'animal', react: 0.2, strength: 0.8, flammability: 0.7, targeting: 'swarm',
     melee: { damage: 7, cooldown: 0.5, reach: 2 },
-    desc: 'Very fast biter. Great at running down archers.',
+    morale: { ...HUMAN_MORALE, baseline: 0.85, brk: 0.15, rally: 0.5, odds: 0.25, cas: 0.1, fear: 0.5, minFlee: 1.5 },
+    desc: 'Very fast biter. Hunts archers, medics and anyone who runs. Too light to set off mines.',
   },
   {
     key: 'rider', name: 'Lancer', cost: 5,
     radius: 10, hp: 170, speed: 128, accel: 260, mass: 3, sight: 380, spacing: 26,
-    role: 'melee', mounted: true,
-    melee: { damage: 12, cooldown: 1.1, reach: 3, chargeDamage: 34, knockback: 220 },
-    desc: 'Charges in at speed. Faster means harder hits and big knockback.',
+    role: 'melee', mounted: true, iq: 'trained', react: 0.3, strength: 3, flammability: 0.4,
+    iceGrip: 0.05, targeting: 'sticky', skittish: true,
+    melee: { damage: 12, cooldown: 1.1, reach: 3, chargeDamage: 34, knockback: 220, throwChance: 0.3 },
+    morale: { ...HUMAN_MORALE, baseline: 0.9, brk: 0.18, rally: 0.5, odds: 0.25, cas: 0.3, wound: 0.3, fear: 0.4 },
+    desc: 'Charges in at speed and tosses enemies aside. Horses bolt from fire and blasts, and skid on ice.',
   },
   {
     key: 'medic', name: 'Medic', cost: 4,
     radius: 6.5, hp: 60, speed: 66, accel: 450, mass: 1, sight: 300, spacing: 20,
-    role: 'healer',
-    heal: { amount: 14, cooldown: 1.0, range: 70, search: 260 },
-    desc: 'Follows the army and patches up wounded allies.',
+    role: 'healer', iq: 'trained', react: 0.35, strength: 0.3, flammability: 0.4,
+    heal: { amount: 14, cooldown: 1.0, range: 70, search: 260, morale: 0.15 },
+    morale: { ...HUMAN_MORALE },
+    desc: 'Patches up the wounded, steadies their nerves and puts out burning allies.',
   },
   {
     key: 'bomber', name: 'Bombardier', cost: 6,
     radius: 7, hp: 60, speed: 55, accel: 400, mass: 1.1, sight: 360, spacing: 22,
-    role: 'ranged',
+    role: 'ranged', iq: 'trained', react: 0.4, strength: 1, flammability: 0.5,
     ranged: {
       range: 320, minRange: 70, keep: 180, damage: 38, cooldown: 3.4, projectile: 'bomb',
       speed: 260, spread: 22, aoe: 42, lob: true, knockback: 180,
     },
-    desc: 'Lobs bombs over walls. Splash damage, but slow to reload.',
+    morale: { ...HUMAN_MORALE },
+    desc: 'Lobs bombs over walls. Splash damage that throws units and lights brambles, but slow to reload.',
   },
   {
     key: 'golem', name: 'Golem', cost: 18,
     radius: 18, hp: 950, speed: 38, accel: 160, mass: 14, sight: 320, spacing: 50,
-    role: 'melee', mounted: true,
-    melee: { damage: 42, cooldown: 1.8, reach: 6, aoe: 30, knockback: 260 },
-    desc: 'A slow walking boulder. Smashes groups and sends them flying.',
+    role: 'melee', mounted: true, iq: 'mindless', react: 0.5, strength: 12, flammability: 0,
+    iceGrip: 1, targeting: 'sticky', noStun: true,
+    melee: { damage: 42, cooldown: 1.8, reach: 6, aoe: 30, knockback: 260, throwChance: 0.5 },
+    morale: { canBreak: false },
+    desc: 'A slow walking boulder. Fireproof and fearless. Smashes groups and sends them flying.',
+  },
+  {
+    key: 'mine', name: 'Mine', cost: 2,
+    radius: 4.5, hp: 40, speed: 0, accel: 0, mass: 50, sight: 0, spacing: 38,
+    role: 'prop', prop: true, flammability: 0,
+    mine: { trigger: 9.5, fuse: 0.4, minMass: 1 },
+    blast: { radius: 46, damage: 110, knockback: 220, minFrac: 0.2, ignite: 0 },
+    desc: 'Hidden from the enemy. Goes off under any enemy except hounds. Blasts set off nearby mines.',
+  },
+  {
+    key: 'keg', name: 'Powder Keg', cost: 3,
+    radius: 7, hp: 45, speed: 0, accel: 0, mass: 40, sight: 0, spacing: 24,
+    role: 'prop', prop: true, flammability: 0.9,
+    blast: { radius: 70, damage: 95, knockback: 260, minFrac: 0.2, ignite: 0.6 },
+    desc: 'Explodes in a fireball when shot, burnt or caught in a blast. Hurts both sides.',
   },
 ];
+
+/** Defaults for behaviour stats a unit doesn't set. */
+export const UNIT_DEFAULTS = {
+  iq: 'trained', react: 0.35, strength: 1, flammability: 0.4, iceGrip: 0.2,
+  morale: { canBreak: false },
+};
+for (const u of UNITS) {
+  for (const [k, v] of Object.entries(UNIT_DEFAULTS)) if (u[k] === undefined) u[k] = v;
+}
 
 export const UNIT_KEYS = UNITS.map((u) => u.key);
 export const UNIT_INDEX = Object.fromEntries(UNITS.map((u, i) => [u.key, i]));

@@ -28,7 +28,7 @@ npm start
 
 Then open http://localhost:3000. This is only a static file server, needed because ES modules and Web Workers don't load from `file://`. To try it alone, open a second tab and join your own room. Seats are per tab. Two tabs in one browser share the saved player name, so set it before each create or join.
 
-`npm test` plays a headless two-player match against the room logic and checks the static server.
+`npm test` runs the wall pathfinding and combat-system tests against the battle sim, then plays a headless two-player match against the room logic and checks the static server.
 
 ## How a match works
 
@@ -52,14 +52,14 @@ Then open http://localhost:3000. This is only a static file server, needed becau
 
 | Unit | Default cost | Notes |
 |---|---|---|
-| Militia | 1 | Cheap melee fodder |
+| Militia | 1 | Cheap melee fodder. Breaks and runs when outnumbered |
 | Pikeman | 2 | Long reach, triple damage against Lancers and Golems |
 | Archer | 3 | Ranged, backs away from melee. Walls block arrows |
 | Hound | 2 | Very fast biter |
 | Lancer | 5 | Charge damage and knockback that grow with speed |
 | Medic | 4 | Heals wounded allies |
 | Bombardier | 6 | Lobs splash-damage bombs over walls |
-| Golem | 18 | Huge HP, area smash that throws units |
+| Golem | 18 | Huge HP, area smash that throws units. Fireproof and fearless |
 
 ### Terrain (cost per 10×10 tile)
 
@@ -68,7 +68,25 @@ Then open http://localhost:3000. This is only a static file server, needed becau
 | Stone Wall | 0.25 | Blocks movement and arrows. Units smash through when there is no way around |
 | Pond | 0.12 | 45% speed. Units standing in it can't shoot |
 | Mud | 0.08 | 60% speed |
-| Brambles | 0.15 | 80% speed, light damage over time |
+| Brambles | 0.15 | 80% speed, light damage over time. Burns: fire races through it and sets units alight, then leaves bare ground |
+| Ice | 0.1 | Almost no grip. Fast units skid and fall. Blasts and fire melt it into water |
+
+### Props (Terrain tab, cost each)
+
+Props are placed like units but don't fight, nobody targets them, and they don't count towards an army's survival. An army with only props left has lost.
+
+| Prop | Default cost | Notes |
+|---|---|---|
+| Mine | 2 | Hidden from the enemy until it's armed. Any enemy heavy enough to set it off (not Hounds) lights a 0.4 s fuse. Blasts set off nearby mines in a chain |
+| Powder Keg | 3 | Explodes in a fireball when shot, burnt or caught in a blast. Hurts every side |
+
+### Combat systems
+
+- **Morale.** Each unit keeps weighing up its chances: the strength of enemies close by against its friends (enemies charging in count double), fear from nearby deaths on its side, how much of its group has died, and its own wounds. Hits and near misses rattle it too. When morale runs out the unit breaks and flees (drawn in pale colours). It can rally later, and a routed unit that reaches the map edge leaves the battle for good. Golems never break.
+- **Reaction and targeting.** Every unit spawns slightly different (bravery, reaction time, speed). A newly spotted enemy takes a moment to react to. Units pick between nearby enemies by distance and avoid ones that are already mobbed or under fire. Hounds hunt archers, medics, bombardiers and runners. Pikemen, Lancers and Golems stick to their target.
+- **Fire.** Kegs and burning units set things alight, with a chance scaled by each unit's flammability. Burning hurts, terrifies and spreads by touch. Units run to nearby water to put it out, and medics put out burning allies. Golems are fireproof.
+- **Blasts and throws.** Bombs, mines and kegs share one explosion model: damage falls off with distance, walls shield units, and big hits throw units into the air. They land hard. Lancer charges and Golem smashes can throw too. Lancers bolt from blasts and fire.
+- **Dodging.** Pikemen, archers, medics, bombardiers and lancers sidestep incoming bombs if they react in time, and step away from a beeping mine.
 
 ## How it's built
 
@@ -82,12 +100,14 @@ host/sim.js        Battle simulation (30 Hz): spatial hash, Dijkstra flow fields
 host/worker.js     Runs the hub in a Web Worker inside the host's tab
 shared/            Units, terrain, costs, draft encoding, binary snapshot format
 tools/serve.js     Local static server for development
-test/smoke.js      Headless end-to-end test: npm test
+test/walls.js      Pathfinding tests around walls
+test/systems.js    Mines, kegs, fire, ice, morale and props
+test/smoke.js      Headless end-to-end test
 ```
 
 - **The host's browser is the server.** The room and the battle run in a Web Worker in the host's tab. Worker timers aren't throttled in background tabs, so the battle keeps its pace if the host switches tabs. Both players' drafts are validated against the budget and their zone. The host's own player goes through the same checks as the friend. Because the host's browser runs the simulation, a host who edits the code could cheat. That's fine for games between friends.
-- **Networking.** [PeerJS](https://peerjs.com/) connects each guest's browser to the host's over a WebRTC data channel. The room code maps to a PeerJS ID (`scribble-siege-room-ABCD`) on PeerJS's free public broker, which is only used to make the introduction. Game data goes directly between the players. When strict NATs or firewalls block a direct connection, it goes through PeerJS's public TURN relay instead. Battles stream as binary snapshots at 15 Hz (10 bytes per unit), and each client smooths them by interpolation.
+- **Networking.** [PeerJS](https://peerjs.com/) connects each guest's browser to the host's over a WebRTC data channel. The room code maps to a PeerJS ID (`scribble-siege-room-ABCD`) on PeerJS's free public broker, which is only used to make the introduction. Game data goes directly between the players. When strict NATs or firewalls block a direct connection, it goes through PeerJS's public TURN relay instead. Battles stream as binary snapshots at 15 Hz (12 bytes per unit, including burning, fleeing and airborne state), and each client smooths them by interpolation. Mines are sent to everyone and hidden by the client, so like the host's simulation they're on trust between friends.
 - **Walls and pathfinding.** Each side gets a Dijkstra flow field toward its nearest enemies. Wall tiles count as passable but very expensive (60 tiles of open ground each), so units walk a long way round to a real gap, but a fully walled-in army still gets a route out. Units on that route, or pinned against a wall (for example by a gap too narrow for them), attack the wall. Each wall tile has 160 HP, and bomb blasts crack walls too. Broken tiles turn into open ground for everyone. Units drawn overlapping a wall are moved to the nearest open spot when the battle starts. `node test/walls.js` covers these cases.
 - **Reconnecting.** If a guest drops, they get their seat back within 2 minutes, including mid-battle. Both sides send heartbeats every 3 seconds, and 15 seconds of silence counts as a disconnect.
 - **Limits.** The match lasts only as long as the host's tab is open. A few very locked-down networks (some school or office firewalls) block WebRTC entirely.
-- **Adding a unit.** Add an entry to `UNITS` in `shared/config.js` and a drawing function in `client/sprites.js`. If it needs new behaviour, add a role in `host/sim.js`.
+- **Adding a unit.** Add an entry to `UNITS` in `shared/config.js` and a drawing function in `client/sprites.js`. Its behaviour stats (intelligence, reaction time, morale, flammability, targeting and so on) are described at the top of the `UNITS` list. If it needs new behaviour, add a role in `host/sim.js`. Set `prop: true` for things that are placed but don't fight.

@@ -5,13 +5,14 @@
 //   u32 tick
 //   u16 unitCount
 //   u16 projectileCount
-//   unitCount x 10 bytes:
-//     u16 id, u8 (type | side<<6), u16 x*32, u16 y*32, u8 hp(0-255), u8 heading(0-255), u8 flags
+//   unitCount x 12 bytes:
+//     u16 id, u8 (type | side<<6), u16 x*32, u16 y*32, u8 hp(0-255), u8 heading(0-255), u8 flags,
+//     u8 flags2, u8 z (height in the air, px)
 //   projectileCount x 9 bytes:
 //     u16 id, u8 kind, u16 x*32, u16 y*32, u8 z, u8 angle(0-255)
 
 export const MSG_SNAPSHOT = 1;
-const UNIT_BYTES = 10;
+const UNIT_BYTES = 12;
 const PROJ_BYTES = 9;
 const TAU = Math.PI * 2;
 
@@ -19,6 +20,11 @@ export const FLAG_ATTACK_MASK = 0x0f; // attack animation 0..15
 export const FLAG_WATER = 0x10;
 export const FLAG_STUN = 0x20;
 export const FLAG_HURT = 0x40;
+// flags2
+export const FLAG2_BURN = 0x01;
+export const FLAG2_FLEE = 0x02;
+export const FLAG2_ARMED = 0x04; // a mine or keg with a lit fuse
+export const FLAG2_PANIC = 0x08;
 
 const angleToByte = (a) => Math.round((((a % TAU) + TAU) % TAU) / TAU * 255) & 255;
 const byteToAngle = (b) => (b / 255) * TAU;
@@ -44,6 +50,13 @@ export function encodeSnapshot(tick, units, projectiles) {
     if (u.stun > 0) flags |= FLAG_STUN;
     if (u.hurt > 0) flags |= FLAG_HURT;
     v.setUint8(o + 9, flags);
+    let f2 = 0;
+    if (u.burn > 0) f2 |= FLAG2_BURN;
+    if (u.fleeing) f2 |= FLAG2_FLEE;
+    if (u.armed) f2 |= FLAG2_ARMED;
+    if (u.panicT > 0) f2 |= FLAG2_PANIC;
+    v.setUint8(o + 10, f2);
+    v.setUint8(o + 11, Math.max(0, Math.min(255, Math.round(u.z || 0))));
     o += UNIT_BYTES;
   }
   for (const p of projectiles) {
@@ -69,6 +82,7 @@ export function decodeSnapshot(arrayBuffer) {
   for (let i = 0; i < nu; i++) {
     const ts = v.getUint8(o + 2);
     const flags = v.getUint8(o + 9);
+    const f2 = v.getUint8(o + 10);
     units.set(v.getUint16(o, true), {
       type: ts & 0x3f,
       side: ts >> 6,
@@ -80,6 +94,10 @@ export function decodeSnapshot(arrayBuffer) {
       water: (flags & FLAG_WATER) !== 0,
       stun: (flags & FLAG_STUN) !== 0,
       hurt: (flags & FLAG_HURT) !== 0,
+      burn: (f2 & FLAG2_BURN) !== 0,
+      flee: (f2 & FLAG2_FLEE) !== 0,
+      armed: (f2 & FLAG2_ARMED) !== 0,
+      z: v.getUint8(o + 11),
     });
     o += UNIT_BYTES;
   }
