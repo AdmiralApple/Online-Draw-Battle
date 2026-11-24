@@ -57,7 +57,7 @@ Then open http://localhost:3000. This is only a static file server, needed becau
    | Frozen Rivers | Ice along the borders and a frozen pond in the middle |
    | Outposts | Three small camps far apart, with a pond and brambles between them |
 
-   Map terrain only ever sits in no man's land.
+   On the Y-shaped maps the three borders are 120 degrees apart, so no zone is a thin strip. Map terrain only ever sits in no man's land.
 3. **Battle.** Once everyone clicks Ready, or the timer runs out, there's a 3-second countdown and then the fight. The battle ends when only one army is left, or after 3 minutes. At the time limit, whoever kept the biggest share of their army's value wins.
 4. **Results.** The host can start a rematch, which keeps both armies so you can adjust them, or go back to the lobby to change the rules.
 

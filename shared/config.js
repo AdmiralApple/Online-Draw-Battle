@@ -30,22 +30,34 @@ const W = WORLD.width;
 const H = WORLD.height;
 const HALF_W = W / 2;
 
-/** Three zones meeting at (HALF_W, meetY): one on top and two below, or flipped. */
+/**
+ * Three zones meeting at (HALF_W, meetY) with all three borders 120 degrees apart: one runs
+ * straight down, the other two climb at 30 degrees to the side edges. That gives the top
+ * zone a proper wedge instead of a thin strip. Flipped mirrors the map top to bottom
+ * (two zones on top, one below). meetY is chosen per gap width so the zones come out equal.
+ */
+const T30 = Math.tan(Math.PI / 6);
 function yPolys(meetY, flipped) {
-  const m = [HALF_W, meetY];
+  const y1 = meetY - HALF_W * T30; // where the slanted borders reach the side edges
   if (!flipped) {
+    const m = [HALF_W, meetY];
     return [
-      [[0, 0], [W, 0], m], // top
-      [[0, 0], m, [HALF_W, H], [0, H]], // bottom-left
-      [m, [W, 0], [W, H], [HALF_W, H]], // bottom-right
+      [[0, 0], [W, 0], [W, y1], m, [0, y1]], // top
+      [[0, y1], m, [HALF_W, H], [0, H]], // bottom-left
+      [m, [W, y1], [W, H], [HALF_W, H]], // bottom-right
     ];
   }
+  const m = [HALF_W, H - meetY];
+  const f1 = H - y1;
   return [
-    [[0, 0], [HALF_W, 0], m, [0, H]], // top-left
-    [[HALF_W, 0], [W, 0], [W, H], m], // top-right
-    [[0, H], m, [W, H]], // bottom
+    [[0, 0], [HALF_W, 0], m, [0, f1]], // top-left
+    [[HALF_W, 0], [W, 0], [W, f1], m], // top-right
+    [[0, f1], m, [W, f1], [W, H], [0, H]], // bottom
   ];
 }
+
+/** Where a Y map's slanted borders reach the side edges. */
+const yEdge = (meetY) => meetY - HALF_W * T30;
 
 /** A regular octagon around (cx, cy). */
 function octagon(cx, cy, r) {
@@ -92,43 +104,49 @@ export const MAPS = {
     polys: [[[0, 0], [HALF_W, 0], [HALF_W, H], [0, H]], [[HALF_W, 0], [W, 0], [W, H], [HALF_W, H]]],
   },
   crossroads: {
-    name: 'Crossroads', players: 3, gap: NO_MANS_LAND, polys: yPolys(510, false),
+    name: 'Crossroads', players: 3, gap: NO_MANS_LAND, polys: yPolys(441, false),
     desc: 'Three big zones meeting in the middle. Every army borders both others.',
   },
   close: {
-    name: 'Close Quarters', players: 3, gap: 50, polys: yPolys(495, false),
-    desc: 'The biggest zones and a thin strip of no man\'s land. Fighting starts at once.',
+    name: 'Close Quarters', players: 3, gap: 50, polys: yPolys(432, false),
+    desc: "The biggest zones and a thin strip of no man's land. Fighting starts at once.",
   },
   farapart: {
-    name: 'Far Apart', players: 3, gap: 260, polys: yPolys(550, false),
-    desc: 'Wide no man\'s land with a lake where the borders meet and bramble thickets.',
+    name: 'Far Apart', players: 3, gap: 260, polys: yPolys(462, false),
+    desc: "Wide no man's land with a lake where the borders meet and bramble thickets.",
     terrain(p) {
-      p.disc(HALF_W, 505, 62, T.WATER);
-      p.disc(320, 255, 40, T.BRAMBLE);
-      p.disc(W - 320, 255, 40, T.BRAMBLE);
-      p.disc(HALF_W, 650, 36, T.BRAMBLE);
+      const my = 462;
+      const y1 = yEdge(my);
+      p.disc(HALF_W, my - 20, 62, T.WATER);
+      p.disc(HALF_W / 2, (my + y1) / 2, 40, T.BRAMBLE);
+      p.disc(W - HALF_W / 2, (my + y1) / 2, 40, T.BRAMBLE);
+      p.disc(HALF_W, (my + H) / 2 + 30, 36, T.BRAMBLE);
     },
   },
   inverted: {
-    name: 'Ruins', players: 3, gap: NO_MANS_LAND, polys: yPolys(210, true),
+    name: 'Ruins', players: 3, gap: NO_MANS_LAND, polys: yPolys(441, true),
     desc: 'Flipped: two zones on top, one below. A broken stone ring stands where the borders meet.',
     terrain(p) {
-      const gates = [-Math.PI / 2, Math.atan2(H - 210, -HALF_W), Math.atan2(H - 210, HALF_W)];
-      p.disc(HALF_W, 210, 70, T.MUD);
-      p.ring(HALF_W, 210, 78, 90, T.WALL, gates, 0.5);
+      const my = H - 441;
+      const f1 = H - yEdge(441);
+      const gates = [-Math.PI / 2, Math.atan2(f1 - my, -HALF_W), Math.atan2(f1 - my, HALF_W)];
+      p.disc(HALF_W, my, 70, T.MUD);
+      p.ring(HALF_W, my, 78, 90, T.WALL, gates, 0.5);
       // Tumbled wall stubs further out along each border.
-      for (const a of gates) p.seg(HALF_W + Math.cos(a) * 170, 210 + Math.sin(a) * 170, HALF_W + Math.cos(a) * 230, 210 + Math.sin(a) * 230, 12, T.WALL);
+      for (const a of gates) p.seg(HALF_W + Math.cos(a) * 170, my + Math.sin(a) * 170, HALF_W + Math.cos(a) * 230, my + Math.sin(a) * 230, 12, T.WALL);
     },
   },
   frozen: {
-    name: 'Frozen Rivers', players: 3, gap: 180, polys: yPolys(530, false),
+    name: 'Frozen Rivers', players: 3, gap: 180, polys: yPolys(450, false),
     desc: 'Rivers of ice run along the borders to a frozen pond in the middle.',
     terrain(p) {
-      p.seg(HALF_W, 530, 0, 0, 34, T.ICE);
-      p.seg(HALF_W, 530, W, 0, 34, T.ICE);
-      p.seg(HALF_W, 530, HALF_W, H, 34, T.ICE);
-      p.disc(HALF_W, 520, 80, T.ICE);
-      p.disc(HALF_W, 520, 30, T.WATER);
+      const my = 450;
+      const y1 = yEdge(my);
+      p.seg(HALF_W, my, 0, y1, 34, T.ICE);
+      p.seg(HALF_W, my, W, y1, 34, T.ICE);
+      p.seg(HALF_W, my, HALF_W, H, 34, T.ICE);
+      p.disc(HALF_W, my - 8, 80, T.ICE);
+      p.disc(HALF_W, my - 8, 30, T.WATER);
     },
   },
   outposts: {

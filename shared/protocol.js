@@ -13,7 +13,7 @@
 
 export const MSG_SNAPSHOT = 1;
 // Bump whenever host and guest code stop being compatible; mismatched joins are refused.
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;
 const UNIT_BYTES = 13;
 const PROJ_BYTES = 9;
 const TAU = Math.PI * 2;
