@@ -557,6 +557,40 @@ export function sprite(type, side, variant = 'normal') {
   return s;
 }
 
+// Rotating every sprite as it's drawn is slow with big armies, so the battle draws
+// pre-rotated copies instead: one per ROT_STEPS headings, rendered at the screen's
+// resolution. Drawing those needs no rotation and is several times faster.
+const ROT_STEPS = 32;
+const TAU = Math.PI * 2;
+const rotCache = new Map();
+let rotRes = 0;
+
+/**
+ * A copy of a unit's sprite turned to the nearest of ROT_STEPS headings, at `res` device
+ * pixels per world pixel. Returns { img, half }: draw it centred, `half * 2` world px square.
+ */
+export function rotatedSprite(type, side, variant, heading, res) {
+  const rr = Math.min(4, Math.max(1, Math.round(res * 2) / 2));
+  if (rr !== rotRes) { rotCache.clear(); rotRes = rr; }
+  const step = ((Math.round((heading / TAU) * ROT_STEPS) % ROT_STEPS) + ROT_STEPS) % ROT_STEPS;
+  const key = ((type * 4 + side) * 3 + (variant === 'hurt' ? 1 : variant === 'flee' ? 2 : 0)) * ROT_STEPS + step;
+  let s = rotCache.get(key);
+  if (s) return s;
+  const base = sprite(type, side, variant);
+  const half = Math.hypot(base.ox, base.oy);
+  const size = Math.ceil(half * 2 * rr);
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const g = canvas.getContext('2d');
+  g.translate(size / 2, size / 2);
+  g.rotate((step / ROT_STEPS) * TAU);
+  g.scale(size / (half * 2), size / (half * 2));
+  g.drawImage(base.img, -base.ox, -base.oy, base.w, base.h);
+  s = { img: canvas, half };
+  rotCache.set(key, s);
+  return s;
+}
+
 /** A small square icon of a unit, for the palette. */
 export function unitIcon(type, side, size = 44) {
   const def = UNITS[type];

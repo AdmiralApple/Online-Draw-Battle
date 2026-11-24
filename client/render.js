@@ -3,7 +3,7 @@
 import {
   WORLD, COLS, ROWS, UNITS, T, zonePolygon, zoneCentre, zoneCount,
 } from '../shared/config.js';
-import { sprite, TEAM, INK } from './sprites.js';
+import { sprite, rotatedSprite, TEAM, INK } from './sprites.js';
 
 const TS = 2; // offscreen layer pixels per world pixel
 const TILE = WORLD.tile;
@@ -538,20 +538,21 @@ export class Renderer {
     const t = performance.now() / 1000;
     // Ground-level units first, airborne ones on top.
     const order = units.some((u) => u.z) ? [...units].sort((a, b) => (a.z || 0) - (b.z || 0)) : units;
+    // Pre-rotated sprites at screen resolution: no per-unit rotation, much faster for big armies.
+    ctx.setTransform(k, 0, 0, k, sx * k, sy * k);
+    const res = k * 1.25;
+    const wobble = performance.now() / 40;
     for (const u of order) {
-      const s = sprite(u.type, u.side, u.hurt ? 'hurt' : u.flee ? 'flee' : 'normal');
+      const s = rotatedSprite(u.type, u.side, u.hurt ? 'hurt' : u.flee ? 'flee' : 'normal', u.heading, res);
       const r = UNITS[u.type].radius;
       const push = (u.attack || 0) * r * 0.45;
       const lift = u.z || 0;
-      const sc = 1 + lift / 160;
-      const cos = Math.cos(u.heading) * sc;
-      const sin = Math.sin(u.heading) * sc;
-      let x = u.x + Math.cos(u.heading) * push;
-      const y = u.y + Math.sin(u.heading) * push - lift;
-      if (u.stun) { x += Math.sin(performance.now() / 40 + u.x) * 0.8; }
-      ctx.setTransform(k * cos, k * sin, -k * sin, k * cos, (x + sx) * k, (y + sy) * k);
+      const half = s.half * (1 + lift / 160);
+      let x = u.x + (push ? Math.cos(u.heading) * push : 0);
+      const y = u.y + (push ? Math.sin(u.heading) * push : 0) - lift;
+      if (u.stun) x += Math.sin(wobble + u.x) * 0.8;
       if (u.ghost) ctx.globalAlpha = u.ghost;
-      ctx.drawImage(s.img, -s.ox, -s.oy, s.w, s.h);
+      ctx.drawImage(s.img, x - half, y - half, half * 2, half * 2);
       if (u.ghost) ctx.globalAlpha = 1;
     }
 

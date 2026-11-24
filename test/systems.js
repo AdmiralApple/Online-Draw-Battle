@@ -308,6 +308,7 @@ const steps = (b, seconds) => { for (let i = 0; i < seconds * TICK_RATE && !b.ov
   // A hexer turns the strongest enemy into a frog.
   {
     const b = battle({ units: [[U.hexer, 500, 360]], grid: grid() }, { units: [[U.militia, 700, 330], [U.rider, 700, 390]], grid: grid() });
+    b.units[0].hexCd = 0.5; // curse ready early, before the lancer can break its nerve
     const n = evs(b, 8, 'hex');
     const frogs = b.units.filter((u) => u.type === U.frog).length;
     check(n > 0 && frogs > 0, 'hexer turns an enemy into a frog', `hexes=${n} frogs=${frogs}`);

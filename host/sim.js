@@ -319,12 +319,45 @@ export class Battle {
   // --- Spatial queries ---------------------------------------------------------
   rebuildHash() {
     for (const cell of this.hash) cell.length = 0;
+    // Each side also gets its own grid of fighting units (no props), so searches for
+    // enemies or friends skip everyone else. Big, packed armies make this matter.
+    if (!this.sideHash) this.sideHash = Array.from({ length: this.sides }, () => Array.from({ length: HC * HR }, () => []));
+    for (const g of this.sideHash) for (const cell of g) cell.length = 0;
+    if (!this.cellStr) this.cellStr = Array.from({ length: this.sides }, () => new Float32Array(HC * HR));
+    for (const cs of this.cellStr) cs.fill(0);
+    let maxR = 1;
     for (const u of this.units) {
       if (!u.alive) continue;
+      if (u.r > maxR && !u.def.mine && !u.def.peel) maxR = u.r;
       const cx = Math.min(HC - 1, Math.max(0, (u.x / HASH_CELL) | 0));
       const cy = Math.min(HR - 1, Math.max(0, (u.y / HASH_CELL) | 0));
       this.hash[cy * HC + cx].push(u);
+      if (!u.prop) {
+        this.sideHash[u.side][cy * HC + cx].push(u);
+        if (!u.fleeing) this.cellStr[u.side][cy * HC + cx] += u.def.strength;
+      }
     }
+    this.maxR = maxR; // biggest body on the field right now, for overlap checks
+  }
+
+  /** Like forNear, but only one side's fighting units. */
+  forNearSide(side, x, y, radius, fn) {
+    const g = this.sideHash[side];
+    const c0 = Math.max(0, ((x - radius) / HASH_CELL) | 0);
+    const c1 = Math.min(HC - 1, ((x + radius) / HASH_CELL) | 0);
+    const r0 = Math.max(0, ((y - radius) / HASH_CELL) | 0);
+    const r1 = Math.min(HR - 1, ((y + radius) / HASH_CELL) | 0);
+    for (let r = r0; r <= r1; r++) {
+      for (let c = c0; c <= c1; c++) {
+        const cell = g[r * HC + c];
+        for (let i = 0; i < cell.length; i++) fn(cell[i]);
+      }
+    }
+  }
+
+  /** Every other side's fighting units near (x, y). */
+  forNearEnemies(side, x, y, radius, fn) {
+    for (let s = 0; s < this.sides; s++) if (s !== side) this.forNearSide(s, x, y, radius, fn);
   }
 
   forNear(x, y, radius, fn) {
@@ -345,8 +378,8 @@ export class Battle {
       if (rad > maxRange) continue;
       let best = null;
       let bestD = rad * rad;
-      this.forNear(u.x, u.y, rad, (o) => {
-        if (o.side === u.side || !o.alive || o.prop) return;
+      this.forNearEnemies(u.side, u.x, u.y, rad, (o) => {
+        if (!o.alive) return;
         const dx = o.x - u.x;
         const dy = o.y - u.y;
         const d2 = dx * dx + dy * dy;
@@ -1601,32 +1634,28 @@ export class Battle {
     u.moraleAt = this.time;
     const m = u.def.morale;
     let hostile = 0;
-    let friend = u.def.strength;
     let nearest = null;
     let nd = ODDS_RADIUS;
-    this.forNear(u.x, u.y, ODDS_RADIUS, (o) => {
-      if (o === u || !o.alive || o.prop) return;
+    this.forNearEnemies(u.side, u.x, u.y, ODDS_RADIUS, (o) => {
+      if (!o.alive) return;
       const dx = u.x - o.x;
       const dy = u.y - o.y;
       const d = Math.hypot(dx, dy);
       if (d > ODDS_RADIUS) return;
       let s = o.def.strength * (0.3 + 0.7 * (1 - d / ODDS_RADIUS));
-      if (o.side !== u.side) {
-        // Enemies charging straight in count for up to double.
-        const toward = (dx * o.vx + dy * o.vy) / (d || 1);
-        if (toward > 0.6 * o.def.speed) s *= 1 + Math.min(1, toward / Math.max(1, o.def.speed));
-        if (o.fleeing) s *= 0.3;
-        hostile += s;
-        if (d < nd) { nd = d; nearest = o; }
-      } else if (!o.fleeing) {
-        friend += s;
-      }
+      // Enemies charging straight in count for up to double.
+      const toward = (dx * o.vx + dy * o.vy) / (d || 1);
+      if (toward > 0.6 * o.def.speed) s *= 1 + Math.min(1, toward / Math.max(1, o.def.speed));
+      if (o.fleeing) s *= 0.3;
+      hostile += s;
+      if (d < nd) { nd = d; nearest = o; }
     });
     if (nearest) u.threat = nearest;
     else if (u.threat && (!u.threat.alive || Math.hypot(u.threat.x - u.x, u.threat.y - u.y) > 300)) u.threat = null;
     if (!m.canBreak) return;
     // Morale switched off in the lobby: everyone stays steady.
     if (!this.moraleOn) { u.morale = m.baseline * u.bravery; u.fleeing = false; return; }
+    const friend = this.friendStrength(u);
 
     const odds = hostile / friend;
     const fear = this.fearAt(u.side, u.x, u.y);
@@ -1644,6 +1673,38 @@ export class Battle {
     else if (u.fleeing && u.morale > m.rally && u.fleeT >= m.minFlee) u.fleeing = false;
   }
 
+  /**
+   * Strength of steady friends around a unit, weighted by distance (itself included).
+   * Read from per-cell totals rather than visiting every friend: in a packed army that's
+   * a dozen cells instead of hundreds of units.
+   */
+  friendStrength(u) {
+    const cs = this.cellStr[u.side];
+    const R = ODDS_RADIUS;
+    const c0 = Math.max(0, ((u.x - R) / HASH_CELL) | 0);
+    const c1 = Math.min(HC - 1, ((u.x + R) / HASH_CELL) | 0);
+    const r0 = Math.max(0, ((u.y - R) / HASH_CELL) | 0);
+    const r1 = Math.min(HR - 1, ((u.y + R) / HASH_CELL) | 0);
+    let f = u.def.strength;
+    for (let r = r0; r <= r1; r++) {
+      for (let c = c0; c <= c1; c++) {
+        const v = cs[r * HC + c];
+        if (!v) continue;
+        const d = Math.hypot((c + 0.5) * HASH_CELL - u.x, (r + 0.5) * HASH_CELL - u.y);
+        if (d > R + HASH_CELL * 0.5) continue;
+        f += v * (0.3 + 0.7 * Math.max(0, 1 - d / R));
+      }
+    }
+    // The unit itself sits in one of those cells; don't count it twice.
+    if (!u.fleeing) {
+      const cx = Math.min(HC - 1, Math.max(0, (u.x / HASH_CELL) | 0));
+      const cy = Math.min(HR - 1, Math.max(0, (u.y / HASH_CELL) | 0));
+      const d = Math.hypot((cx + 0.5) * HASH_CELL - u.x, (cy + 0.5) * HASH_CELL - u.y);
+      f -= u.def.strength * (0.3 + 0.7 * Math.max(0, 1 - d / R));
+    }
+    return Math.max(u.def.strength, f);
+  }
+
   /** Weighted choice between nearby enemies. */
   chooseTarget(u) {
     const d = u.def;
@@ -1658,8 +1719,8 @@ export class Battle {
     const cand = [];
     const weight = [];
     let total = 0;
-    this.forNear(u.x, u.y, R, (o) => {
-      if (o.side === u.side || !o.alive || o.prop) return;
+    this.forNearEnemies(u.side, u.x, u.y, R, (o) => {
+      if (!o.alive) return;
       const dist = Math.hypot(o.x - u.x, o.y - u.y);
       if (dist > R || !this.canSee(u, o, dist * dist) || !this.canTarget(u, o)) return;
       let s = 1 / ((dist + 15) * (dist + 15));
@@ -1836,7 +1897,7 @@ export class Battle {
 
   /** Trained units hear an armed mine beep and step away from it. */
   avoidMines(u, v) {
-    if (u.def.iq !== 'trained') return v;
+    if (u.def.iq !== 'trained' || !this.armedMines) return v;
     let ax = 0;
     let ay = 0;
     this.forNear(u.x, u.y, 50, (o) => {
@@ -2115,8 +2176,8 @@ export class Battle {
       u.corpse = best;
       if (!best) {
         let buddy = null;
-        let bb = 500 * 500;
-        this.forNear(u.x, u.y, 500, (o) => {
+        let bb = 300 * 300;
+        this.forNearSide(u.side, u.x, u.y, 300, (o) => {
           if (o === u || o.side !== u.side || !o.alive || o.prop || o.def.role === 'raiser' || o.def.role === 'nest') return;
           const dd = (o.x - u.x) ** 2 + (o.y - u.y) ** 2;
           if (dd < bb) { bb = dd; buddy = o; }
@@ -2420,8 +2481,8 @@ export class Battle {
       u.retargetHeal = 0.4 + this.rng() * 0.2;
       let best = null;
       let bestScore = Infinity;
-      this.forNear(u.x, u.y, h.search, (o) => {
-        if (o === u || o.side !== u.side || !o.alive || o.prop) return;
+      this.forNearSide(u.side, u.x, u.y, h.search, (o) => {
+        if (o === u || !o.alive) return;
         // Burning allies come first, then the badly hurt, then anyone shaken.
         const needs = o.burn > 0 || o.infected >= 0 || o.hp < o.maxHp * 0.95 || (o.fleeing && o.def.morale.canBreak);
         if (!needs) return;
@@ -2434,8 +2495,8 @@ export class Battle {
       if (!best) {
         // Nobody hurt: tag along behind the nearest friendly fighter.
         let buddy = null;
-        let bd = 500 * 500;
-        this.forNear(u.x, u.y, 500, (o) => {
+        let bd = 250 * 250;
+        this.forNearSide(u.side, u.x, u.y, 250, (o) => {
           if (o === u || o.side !== u.side || !o.alive || o.prop || o.def.role === 'healer') return;
           const dd = (o.x - u.x) ** 2 + (o.y - u.y) ** 2;
           if (dd < bd) { bd = dd; buddy = o; }
@@ -2498,7 +2559,12 @@ export class Battle {
     }
 
     // Who is already attacking whom, so target choice can spread out.
-    for (const u of this.units) { u.meleeOn = 0; u.shotOn = 0; }
+    this.armedMines = 0;
+    for (const u of this.units) {
+      u.meleeOn = 0;
+      u.shotOn = 0;
+      if (u.armed && u.def.mine) this.armedMines++;
+    }
     for (const u of this.units) {
       const t = u.target;
       if (!u.alive || !t || u.fleeing) continue;
@@ -2683,7 +2749,7 @@ export class Battle {
     // Morale, about every 0.2 s.
     u.moraleT -= DT;
     if (u.moraleT <= 0) {
-      u.moraleT = 0.15 + this.rng() * 0.1;
+      u.moraleT = 0.3 + this.rng() * 0.15;
       this.updateMorale(u);
     }
     if (u.fleeing) {
@@ -2808,7 +2874,7 @@ export class Battle {
     this.rebuildHash();
     for (const u of this.units) {
       if (!u.alive || u.def.mine || u.def.peel || u.z > 0) continue;
-      this.forNear(u.x, u.y, u.r + MAX_RADIUS, (o) => {
+      this.forNear(u.x, u.y, u.r + this.maxR, (o) => {
         if (o.id <= u.id || !o.alive || o.def.mine || o.def.peel || o.z > 0) return;
         const dx = o.x - u.x;
         const dy = o.y - u.y;
